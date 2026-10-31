@@ -3,6 +3,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 dist/
+/site/
 *.zip
 *.blend1
 docs/images/_crops.json

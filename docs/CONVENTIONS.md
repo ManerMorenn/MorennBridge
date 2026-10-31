@@ -1,6 +1,6 @@
 # MorennBridge conventions
 
-See `USER_GUIDE.md` for the panel-by-panel walkthrough.
+See the [user guide](USER_GUIDE.md) for the panel-by-panel walkthrough.
 
 ## Units and axes
 - Blender scene: **1 unit = 1 cm** (Scene panel → *Set Up Scene for Unreal*). Metre scenes still export correctly (data is rescaled while staging) but importing UE files into a metre scene needs a rescale, so work in centimetres.

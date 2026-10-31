@@ -18,9 +18,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install ruff==0.17.3
+      - run: pip install ruff==0.17.3 markdown==3.7 pymdown-extensions==12.3 pygments==2.19.1
       - run: ruff check .
       - run: ruff format --check .
+      - name: Build the documentation site
+        run: python dev/build_site.py --out /tmp/site
 
   test:
     name: Tests (Blender ${{ matrix.blender }})
