@@ -10,7 +10,7 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }
-html, body { max-width: 100vw; overflow-x: hidden; }
+body { overflow-x: clip; }
 body {
   background: var(--bg);
   color: var(--text);
@@ -28,19 +28,20 @@ a:hover { text-decoration: underline; }
 /* Top chrome: solid behind the wordmark, fading out below it. */
 .backdrop {
   position: fixed; top: 0; left: 0; right: 0; height: 120px; z-index: 5; pointer-events: none;
-  background: linear-gradient(to bottom, var(--bg) 0, var(--bg) 70px, transparent 120px);
+  background: linear-gradient(to bottom, var(--bg) 0, var(--bg) 72px, transparent 120px);
 }
 .chrome {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 10;
-  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-  padding: 1.1rem 1.25rem;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 10; height: 72px;
+  display: flex; align-items: center; gap: 1.5rem;
+  padding: 0 1.25rem;
 }
+.chrome .menu { margin-left: auto; }
 .wordmark {
   display: inline-flex; align-items: center; gap: .75rem;
   font-family: var(--mono); font-weight: 300; text-transform: uppercase; letter-spacing: .25em;
   font-size: .8rem; color: var(--text);
 }
-.wordmark img { width: 36px; height: 36px; object-fit: contain; border-radius: 2px; }
+.wordmark img { width: 36px; height: 36px; margin: 0; border: 0; object-fit: contain; border-radius: 2px; }
 .wordmark:hover { text-decoration: none; color: #fff; }
 .menu { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .25rem 1.25rem; }
 .menu a {
@@ -49,10 +50,25 @@ a:hover { text-decoration: underline; }
 }
 .menu a:hover, .menu a.active { color: var(--text); text-decoration: none; }
 .menu a.active { border-bottom: 1px solid rgba(200, 209, 225, .35); padding-bottom: 2px; }
+.actions { display: flex; gap: .5rem; flex-shrink: 0; }
+.btn {
+  display: inline-flex; align-items: center; gap: .45rem; height: 30px; padding: 0 .75rem;
+  border: 1px solid rgba(200, 209, 225, .25); border-radius: 4px; background: rgba(26, 29, 41, .7);
+  font-family: var(--mono); font-weight: 400; text-transform: uppercase; letter-spacing: .14em; font-size: .62rem;
+  color: var(--text); transition: border-color .15s ease, background .15s ease;
+}
+.btn:hover { text-decoration: none; border-color: rgba(200, 209, 225, .6); background: var(--bg-2); color: #fff; }
+.btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+.btn-star svg { color: var(--accent); }
+.btn .count {
+  margin-left: .2rem; padding-left: .6rem; border-left: 1px solid rgba(200, 209, 225, .25);
+  letter-spacing: .05em; font-variant-numeric: tabular-nums;
+}
 
 /* Page body */
 .page { flex: 1; width: 100%; padding: 8.5rem 1.5rem 5rem; }
-.layout { max-width: 72rem; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 48rem) 1fr; gap: 4rem; }
+.layout { max-width: 72rem; margin: 0 auto; display: grid; grid-template-columns: 13rem minmax(0, 48rem); gap: 4rem; justify-content: center; }
+.layout:not(:has(.toc)) { grid-template-columns: minmax(0, 48rem); }
 
 .eyebrow {
   font-family: var(--mono); font-weight: 300; text-transform: uppercase; letter-spacing: .3em;
@@ -120,8 +136,11 @@ td code { white-space: nowrap; }
 img { max-width: 100%; height: auto; display: block; margin: 1.75rem auto; border: 1px solid rgba(200, 209, 225, .1); }
 p > img:only-child { margin: 1.75rem auto; }
 
-/* In-page table of contents (desktop only) */
-.toc { position: sticky; top: 7.5rem; align-self: start; font-size: .78rem; padding-top: 4.5rem; }
+/* In-page table of contents: left column, sticks to the viewport below the header (desktop only) */
+.toc {
+  position: sticky; top: 6.5rem; align-self: start; margin-top: 4.5rem; font-size: .78rem;
+  max-height: calc(100vh - 8rem); overflow-y: auto;
+}
 .toc-title {
   font-family: var(--mono); font-weight: 300; text-transform: uppercase; letter-spacing: .25em; font-size: .62rem;
   color: rgba(200, 209, 225, .5); margin-bottom: .75rem;
@@ -152,8 +171,8 @@ p > img:only-child { margin: 1.75rem auto; }
 }
 @media (max-width: 640px) {
   .backdrop { display: none; }
-  .chrome { position: static; flex-direction: column; align-items: flex-start; gap: .9rem; padding: 1.25rem 1rem .5rem; }
-  .menu { justify-content: flex-start; gap: .4rem 1.1rem; }
+  .chrome { position: static; height: auto; flex-direction: column; align-items: flex-start; gap: .9rem; padding: 1.25rem 1rem .5rem; }
+  .menu { justify-content: flex-start; gap: .4rem 1.1rem; margin-left: 0; }
   .page { padding: 2.5rem 1rem 4rem; }
   h2, h3, h4 { scroll-margin-top: 1rem; }
   h2 { margin-top: 2.75rem; }

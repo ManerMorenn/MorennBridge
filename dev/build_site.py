@@ -119,7 +119,6 @@ def nav_html(current_slug, prefix):
         href = f"{prefix}{slug}/" if slug else (prefix or "./")
         cls = ' class="active"' if slug == current_slug else ""
         parts.append(f'<a href="{href}"{cls}>{html.escape(label)}</a>')
-    parts.append(f'<a href="{REPO_URL}" rel="noopener">GitHub</a>')
     return "".join(parts)
 
 
@@ -166,6 +165,7 @@ def build(out_dir):
             "{{prefix}}": prefix,
             "{{home}}": prefix or "./",
             "{{repo}}": REPO_URL,
+            "{{repo_slug}}": REPO_URL.removeprefix("https://github.com/"),
             "{{doc_title}}": html.escape(f"{page_title} | MorennBridge" if slug else "MorennBridge"),
         }.items():
             page = page.replace(key, value)
