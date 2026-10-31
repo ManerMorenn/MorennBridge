@@ -13,19 +13,22 @@ manifest records where MorennBridge expects the asset.
 1. **Plugins**: enable *Python Editor Script Plugin* (it is loaded anyway by Niagara / RigVM) and
    *Editor Scripting Utilities*. Restart the editor.
 2. **Edit → Project Settings → Plugins → Python**:
-   - *Enable Remote Execution*: **on**
-   - *Multicast Group Endpoint*: `239.0.0.1:6766`
-   - *Multicast Bind Address*: `0.0.0.0` on macOS/Linux (`127.0.0.1` sometimes does not receive multicast there);
-     `127.0.0.1` is fine on Windows
-   - *Multicast TTL*: `0` (same machine only)
-   Equivalent `Config/DefaultEngine.ini` block:
-   ```ini
-   [/Script/PythonScriptPlugin.PythonScriptPluginSettings]
-   bRemoteExecution=True
-   RemoteExecutionMulticastGroupEndpoint=239.0.0.1:6766
-   RemoteExecutionMulticastBindAddress=0.0.0.0
-   RemoteExecutionMulticastTtl=0
-   ```
+    - *Enable Remote Execution*: **on**
+    - *Multicast Group Endpoint*: `239.0.0.1:6766`
+    - *Multicast Bind Address*: `0.0.0.0` on macOS/Linux (`127.0.0.1` sometimes does not receive multicast there);
+      `127.0.0.1` is fine on Windows
+    - *Multicast TTL*: `0` (same machine only)
+
+    Equivalent `Config/DefaultEngine.ini` block:
+
+    ```ini
+    [/Script/PythonScriptPlugin.PythonScriptPluginSettings]
+    bRemoteExecution=True
+    RemoteExecutionMulticastGroupEndpoint=239.0.0.1:6766
+    RemoteExecutionMulticastBindAddress=0.0.0.0
+    RemoteExecutionMulticastTtl=0
+    ```
+
 3. **Firewall**: allow the editor to accept local connections (the bridge only uses loopback traffic).
 4. **Interchange**: Project Settings → Interchange → FBX translator: *Force Front X Axis* **off** (the bridge verifies it).
 5. **Blender**: Preferences → System → *Allow Online Access* must be enabled, otherwise the add-on refuses to open sockets.

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{doc_title}}</title>
+  <meta name="description" content="{{title}}. {{subtitle}}">
+  <link rel="icon" href="{{prefix}}favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@200;300;400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{prefix}}style.css">
+{{fonts}}</head>
+<body>
+  <div class="backdrop" aria-hidden="true"></div>
+  <header class="chrome">
+    <a class="wordmark" href="{{home}}" aria-label="MorennBridge home">
+      <img src="{{prefix}}logo.jpg" alt="" width="36" height="36">
+      <span>MorennBridge</span>
+    </a>
+    <nav class="menu" aria-label="Site">{{nav}}</nav>
+  </header>
+
+  <main class="page">
+    <div class="layout">
+      <article class="content">
+        <p class="eyebrow">{{eyebrow}}</p>
+        <h1>{{title}}</h1>
+        {{subtitle_block}}
+        {{content}}
+      </article>
+      {{toc}}
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <p>MorennBridge is free software released under the GPL-3.0-or-later.</p>
+      <p class="footer-links">
+        <a href="{{repo}}" rel="noopener">Source</a>
+        <a href="{{repo}}/releases" rel="noopener">Releases</a>
+        <a href="{{repo}}/issues" rel="noopener">Issues</a>
+        <a href="{{repo}}/blob/main/LICENSE" rel="noopener">License</a>
+      </p>
+      <p class="copyright">Maner Morenn</p>
+    </div>
+  </footer>
+</body>
+</html>

@@ -26,6 +26,7 @@ paths_exclude_pattern = [
   "/.github/",
   "/.ruff_cache/",
   "/dist/",
+  "/site/",
   "/*.zip",
   "/tests/",
   "/dev/",

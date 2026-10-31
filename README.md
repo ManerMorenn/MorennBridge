@@ -59,6 +59,8 @@ The full walkthrough with screenshots is in [`docs/USER_GUIDE.md`](docs/USER_GUI
 
 ## Documentation
 
+The documentation is also published at <https://manermorenn.github.io/MorennBridge/>.
+
 | Document | Content |
 |---|---|
 | [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | Installation, every panel step by step, preferences, with screenshots |
@@ -86,9 +88,11 @@ blender --command extension validate . && blender --command extension build --so
 blender --factory-startup --window-geometry 0 0 1400 850 blank.blend \
     --python dev/make_screenshots.py -- docs/images [UnrealExport.fbx]
 blender -b --python dev/make_screenshots.py -- --crop docs/images
+# documentation site (what GitHub Pages serves; needs `pip install markdown pymdown-extensions pygments`)
+python dev/build_site.py --out site
 ```
 
 CI (GitHub Actions) lints, runs the suite on Blender 4.5 LTS and 5.2 LTS, and builds the extension; tags `v*`
-publish the zip on the release page. See `CHANGELOG.md` for the version history.
+publish the zip on the release page; pushes to `main` redeploy the documentation site. See `CHANGELOG.md` for the version history.
 
 License: GPL-3.0-or-later (the add-on reuses Blender's GPL FBX tooling).
