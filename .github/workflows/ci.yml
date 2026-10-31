@@ -89,7 +89,8 @@ jobs:
           curl -fsSL "$url" | tar -xJ --strip-components=1 -C "$HOME/blender-${{ env.BLENDER_BUILD }}"
 
       - name: Validate the manifest
-        run: "$HOME/blender-${{ env.BLENDER_BUILD }}/blender" --command extension validate .
+        run: |
+          "$HOME/blender-${{ env.BLENDER_BUILD }}/blender" --command extension validate .
 
       - name: Build the extension zip
         run: |

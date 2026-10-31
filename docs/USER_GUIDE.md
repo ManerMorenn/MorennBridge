@@ -24,14 +24,14 @@ To uninstall, open the same page, expand *MorennBridge* under *Installed* and us
 Everything lives in the **MorennBridge** tab of the 3D Viewport sidebar (press `N`). Panels, top to bottom:
 Scene, Export, Import, Object, Armature, Pre-flight, Unreal Link, Log.
 
-![The MorennBridge sidebar tab](images/00_sidebar_overview.png)
+<img src="images/00_sidebar_overview.png" width="280" alt="The MorennBridge sidebar tab">
 
 ## 1. Set the scene up for Unreal
 
 Unreal works in centimetres. Blender's default scene uses metres, which is what makes imported characters tiny,
 armatures scaled by 100 and viewport clipping odd. The **Scene** panel shows the current state and offers two buttons.
 
-![Scene panel on a metre scene](images/01_scene_before_setup.png)
+<img src="images/01_scene_before_setup.png" width="280" alt="Scene panel on a metre scene">
 
 - **Set Up Scene for Unreal** sets metric units with 1 unit = 1 cm, 30 fps, a frame range starting at 0, and a clip
   range / grid scale suited to centimetres on every 3D viewport and camera. It changes settings only, never your
@@ -42,7 +42,7 @@ armatures scaled by 100 and viewport clipping odd. The **Scene** panel shows the
 
 Both report what they did in the **Log** panel.
 
-![Scene panel after setup, with the log](images/02_scene_after_setup.png)
+<img src="images/02_scene_after_setup.png" width="280" alt="Scene panel after setup, with the log">
 
 All values (clip range, fps, grid) are preferences: *Edit → Preferences → Add-ons → MorennBridge*.
 
@@ -78,7 +78,7 @@ The **Log** panel lists each file (double-click opens the folder); the **Object*
 export name, Unreal destination path, role, LOD index and parent, collision type, and buttons that create
 convention objects (socket, box/convex/sphere/capsule collision, LOD chain) for the active mesh.
 
-![Log after an export](images/04_export_done_log.png)
+<img src="images/04_export_done_log.png" width="280" alt="Log after an export">
 
 ## 3. Export skeletal meshes and animations
 
@@ -107,7 +107,7 @@ created by the matching `SKM_` import.
 **Validate Selection** (also run automatically by every export) lists problems with a code, a severity and, when
 possible, a one-click fix. Errors block the export; warnings do not.
 
-![Pre-flight panel listing issues with fix buttons](images/05_preflight_issues.png)
+<img src="images/05_preflight_issues.png" width="280" alt="Pre-flight panel listing issues with fix buttons">
 
 Typical items: `E001` several root bones (fix: add `root`), `E003` mirrored scale (fix: apply), `E010` bone names
 Unreal would rewrite such as `spine.001` (fix: rename them the way Unreal would, so names match on both sides),
@@ -133,14 +133,14 @@ meshes, animations). Compared with Blender's stock importer:
 - data arrives in centimetres; a metre scene is rescaled automatically (the panel suggests running the scene setup
   first).
 
-![Armature panel showing the per-bone Unreal axis](images/07_armature_panel.png)
+<img src="images/07_armature_panel.png" width="280" alt="Armature panel showing the per-bone Unreal axis">
 
 Options on the import dialog: *Convert bone axes*, *Tidy hierarchy*, *Reset pose*. The Armature panel lets you
 flip the convention of a whole rig later (**Convert Bone Axes**) and override the axis of a single bone.
 
 ## 6. Unreal Link (push and pull)
 
-![Unreal Link panel](images/08_unreal_link.png)
+<img src="images/08_unreal_link.png" width="280" alt="Unreal Link panel">
 
 With Python remote execution enabled in the Unreal project (`UE_SETUP.md`, two settings), **Find Unreal** lists the
 running editors. **Push Last Export to Unreal** imports the last manifest with the correct Interchange (or legacy)
