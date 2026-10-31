@@ -66,6 +66,8 @@ h1 {
   font-family: var(--mono); font-weight: 300; text-transform: uppercase; letter-spacing: .15em;
   font-size: .9rem; color: rgba(200, 209, 225, .75); margin-bottom: 2.5rem;
 }
+/* Anchor targets stop below the fixed header instead of under it. */
+h2, h3, h4 { scroll-margin-top: 5.5rem; }
 h2 {
   font-family: var(--mono); font-weight: 200; text-transform: uppercase; letter-spacing: .05em;
   font-size: 1.6rem; line-height: 1.2; margin: 3.5rem 0 1.25rem;
@@ -153,6 +155,7 @@ p > img:only-child { margin: 1.75rem auto; }
   .chrome { position: static; flex-direction: column; align-items: flex-start; gap: .9rem; padding: 1.25rem 1rem .5rem; }
   .menu { justify-content: flex-start; gap: .4rem 1.1rem; }
   .page { padding: 2.5rem 1rem 4rem; }
+  h2, h3, h4 { scroll-margin-top: 1rem; }
   h2 { margin-top: 2.75rem; }
   .footer-inner { flex-direction: column; align-items: flex-start; }
 }
