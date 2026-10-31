@@ -43,13 +43,16 @@ a:hover { text-decoration: underline; }
 }
 .wordmark img { width: 36px; height: 36px; margin: 0; border: 0; object-fit: contain; border-radius: 2px; }
 .wordmark:hover { text-decoration: none; color: #fff; }
-.menu { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .25rem 1.25rem; }
+.menu { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .25rem 1.25rem; }
 .menu a {
   font-family: var(--mono); font-weight: 300; text-transform: uppercase; letter-spacing: .2em;
-  font-size: .66rem; color: rgba(200, 209, 225, .6); transition: color .15s ease;
+  font-size: .66rem; line-height: 1; color: rgba(200, 209, 225, .6); transition: color .15s ease;
 }
-.menu a:hover, .menu a.active { color: var(--text); text-decoration: none; }
-.menu a.active { border-bottom: 1px solid rgba(200, 209, 225, .35); padding-bottom: 2px; }
+.menu a:hover { color: var(--text); text-decoration: none; }
+.menu a.active {
+  color: var(--text); text-decoration: underline; text-decoration-thickness: 1px;
+  text-underline-offset: 7px; text-decoration-color: rgba(200, 209, 225, .35);
+}
 .actions { display: flex; gap: .5rem; flex-shrink: 0; }
 .btn {
   display: inline-flex; align-items: center; gap: .45rem; height: 30px; padding: 0 .75rem;
@@ -67,7 +70,7 @@ a:hover { text-decoration: underline; }
 
 /* Page body */
 .page { flex: 1; width: 100%; padding: 8.5rem 1.5rem 5rem; }
-.layout { max-width: 72rem; margin: 0 auto; display: grid; grid-template-columns: 13rem minmax(0, 48rem); gap: 4rem; justify-content: center; }
+.layout { max-width: 72rem; margin: 0 auto; display: grid; grid-template-columns: 13rem minmax(0, 48rem); gap: 7rem; justify-content: center; }
 .layout:not(:has(.toc)) { grid-template-columns: minmax(0, 48rem); }
 
 .eyebrow {
