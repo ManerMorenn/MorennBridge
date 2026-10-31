@@ -1,0 +1,22 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+  "E501",   # long lines are allowed up to the formatter's judgement
+  "B007",   # unused loop variables are common in bpy iteration
+  "B905",   # zip(strict=...) is not available on every target
+  "UP007",  # keep Optional[...] style out of Blender property annotations
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"ops/__init__.py" = ["F401"]
+"ui/__init__.py" = ["F401"]
+"ue/scripts/*" = ["E402"]   # sys.path setup must precede the unreal/mb_ue_common imports
+"tests/*" = ["E402"]
+
+[tool.ruff.format]
+quote-style = "double"

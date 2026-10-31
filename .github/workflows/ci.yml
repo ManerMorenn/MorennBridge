@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  BLENDER_BUILD: "4.5.9"   # used for packaging; tests also run on the 5.x LTS
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff==0.17.3
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    name: Tests (Blender ${{ matrix.blender }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        blender: ["4.5.9", "5.2.3"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Blender runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon0 libxkbcommon-x11-0 libxi6 libxxf86vm1 libxfixes3 libxrender1 \
+            libgl1 libegl1 libglu1-mesa libsm6 libice6 libxcursor1 libxinerama1 libxrandr2
+
+      - name: Cache Blender
+        id: cache-blender
+        uses: actions/cache@v4
+        with:
+          path: ~/blender-${{ matrix.blender }}
+          key: blender-${{ matrix.blender }}-linux-x64
+
+      - name: Download Blender
+        if: steps.cache-blender.outputs.cache-hit != 'true'
+        run: |
+          series="$(echo '${{ matrix.blender }}' | cut -d. -f1,2)"
+          url="https://download.blender.org/release/Blender${series}/blender-${{ matrix.blender }}-linux-x64.tar.xz"
+          mkdir -p "$HOME/blender-${{ matrix.blender }}"
+          curl -fsSL "$url" | tar -xJ --strip-components=1 -C "$HOME/blender-${{ matrix.blender }}"
+
+      - name: Run the test suite
+        run: |
+          "$HOME/blender-${{ matrix.blender }}/blender" --version
+          "$HOME/blender-${{ matrix.blender }}/blender" -b --python tests/run_tests.py -- -v
+
+  build:
+    name: Build extension
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Blender runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon0 libxkbcommon-x11-0 libxi6 libxxf86vm1 libxfixes3 libxrender1 \
+            libgl1 libegl1 libglu1-mesa libsm6 libice6 libxcursor1 libxinerama1 libxrandr2
+
+      - name: Cache Blender
+        id: cache-blender
+        uses: actions/cache@v4
+        with:
+          path: ~/blender-${{ env.BLENDER_BUILD }}
+          key: blender-${{ env.BLENDER_BUILD }}-linux-x64
+
+      - name: Download Blender
+        if: steps.cache-blender.outputs.cache-hit != 'true'
+        run: |
+          series="$(echo '${{ env.BLENDER_BUILD }}' | cut -d. -f1,2)"
+          url="https://download.blender.org/release/Blender${series}/blender-${{ env.BLENDER_BUILD }}-linux-x64.tar.xz"
+          mkdir -p "$HOME/blender-${{ env.BLENDER_BUILD }}"
+          curl -fsSL "$url" | tar -xJ --strip-components=1 -C "$HOME/blender-${{ env.BLENDER_BUILD }}"
+
+      - name: Validate the manifest
+        run: "$HOME/blender-${{ env.BLENDER_BUILD }}/blender" --command extension validate .
+
+      - name: Build the extension zip
+        run: |
+          mkdir -p dist
+          "$HOME/blender-${{ env.BLENDER_BUILD }}/blender" --command extension build \
+            --source-dir . --output-dir dist
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: morennbridge-extension
+          path: dist/*.zip
+          if-no-files-found: error

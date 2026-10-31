@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.venv/
+dist/
+*.zip
+*.blend1
+docs/images/_crops.json
+.DS_Store
+.idea/
+.vscode/
