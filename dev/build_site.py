@@ -81,6 +81,8 @@ def convert(md_text):
         },
     )
     body = converter.convert(md_text)
+    badge = r'(?:<a [^>]*>)?<img [^>]*src="[^"]*(?:shields\.io|badge\.svg)[^"]*"[^>]*>(?:</a>)?'
+    body = re.sub(rf"<p>((?:\s*{badge})+\s*)</p>", r'<p class="badges">\1</p>', body)
     return body, converter.toc_tokens
 
 
