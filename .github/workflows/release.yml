@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  BLENDER_BUILD: "4.5.9"
+
+jobs:
+  release:
+    name: Build and attach the extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Blender runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon0 libxkbcommon-x11-0 libxi6 libxxf86vm1 libxfixes3 libxrender1 \
+            libgl1 libegl1 libglu1-mesa libsm6 libice6 libxcursor1 libxinerama1 libxrandr2
+
+      - name: Download Blender
+        run: |
+          series="$(echo '${{ env.BLENDER_BUILD }}' | cut -d. -f1,2)"
+          url="https://download.blender.org/release/Blender${series}/blender-${{ env.BLENDER_BUILD }}-linux-x64.tar.xz"
+          mkdir -p "$HOME/blender"
+          curl -fsSL "$url" | tar -xJ --strip-components=1 -C "$HOME/blender"
+
+      - name: Check that the tag matches the manifest version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(grep -E '^version = ' blender_manifest.toml | sed -E 's/version = "(.*)"/\1/')"
+          test "$tag" = "$version" || { echo "tag $tag does not match manifest version $version"; exit 1; }
+
+      - name: Build
+        run: |
+          "$HOME/blender/blender" --command extension validate .
+          mkdir -p dist
+          "$HOME/blender/blender" --command extension build --source-dir . --output-dir dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true

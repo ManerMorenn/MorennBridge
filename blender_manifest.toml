@@ -1,0 +1,36 @@
+schema_version = "1.0.0"
+
+id = "morennbridge"
+version = "0.1.0"
+name = "MorennBridge"
+tagline = "Fast and correct FBX bridge between Blender and Unreal Engine"
+maintainer = "Tristan Allaire <tristan.allaire@alarch.fr>"
+type = "add-on"
+tags = ["Import-Export", "Pipeline"]
+blender_version_min = "4.2.0"
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+copyright = [
+  "2026 Tristan Allaire",
+]
+
+[permissions]
+files = "Export and import FBX files and manifests"
+network = "Talk to a local Unreal Editor over Python remote execution"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "/.github/",
+  "/.ruff_cache/",
+  "/dist/",
+  "/*.zip",
+  "/tests/",
+  "/dev/",
+  "/docs/images/",
+  "/pyproject.toml",
+  "/.editorconfig",
+  "/.gitignore",
+]
