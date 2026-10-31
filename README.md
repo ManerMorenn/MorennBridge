@@ -2,6 +2,13 @@
 
 ### A Blender ⇄ Unreal Engine 5 bridge that simplifies the workflow
 
+[![CI](https://github.com/ManerMorenn/MorennBridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ManerMorenn/MorennBridge/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/ManerMorenn/MorennBridge?include_prereleases&label=release)](https://github.com/ManerMorenn/MorennBridge/releases)
+[![Blender 4.2+](https://img.shields.io/badge/Blender-4.2%2B-ea7600?logo=blender&logoColor=white)](https://www.blender.org/download/)
+[![Unreal Engine 5](https://img.shields.io/badge/Unreal%20Engine-5.8-313131?logo=unrealengine&logoColor=white)](https://www.unrealengine.com/)
+[![License](https://img.shields.io/github/license/ManerMorenn/MorennBridge)](LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-manermorenn.github.io-6ea8fe)](https://manermorenn.github.io/MorennBridge/)
+
 FBX interchange between Blender (4.2 and newer) and Unreal Engine 5, done the way Unreal expects.
 
 Blender and Unreal disagree on units, axes, bone orientation and a dozen exporter checkboxes. MorennBridge encodes

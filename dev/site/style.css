@@ -138,6 +138,9 @@ td code { white-space: nowrap; }
 
 img { max-width: 100%; height: auto; display: block; margin: 1.75rem auto; border: 1px solid rgba(200, 209, 225, .1); }
 p > img:only-child { margin: 1.75rem auto; }
+.badges { display: flex; flex-wrap: wrap; gap: .4rem; margin: -1rem 0 2rem; }
+.badges a { display: inline-flex; }
+.badges img { display: block; height: 20px; margin: 0; border: 0; }
 
 /* In-page table of contents: left column, sticks to the viewport below the header (desktop only) */
 .toc {
