@@ -45,6 +45,17 @@ _LENGTH_MODIFIER_PROPS = {
     "OCEAN": ("size", "depth", "wave_scale"),
 }
 _LOCATION_PATH_SUFFIXES = ("location", "delta_location")
+# Constraint properties that are lengths whatever the constraint's other settings are.
+_LENGTH_CONSTRAINT_PROPS = {
+    "LIMIT_DISTANCE": ("distance",),
+    "LIMIT_LOCATION": ("min_x", "max_x", "min_y", "max_y", "min_z", "max_z"),
+    "FLOOR": ("offset",),
+    "SHRINKWRAP": ("distance",),
+    "STRETCH_TO": ("rest_length",),
+    "PIVOT": ("offset",),
+}
+_TRANSFORM_CONSTRAINT_RANGES = ("min_x", "max_x", "min_y", "max_y", "min_z", "max_z")
+_SCALABLE_SOCKET_SUBTYPES = ("DISTANCE", "TRANSLATION")
 
 
 def _scale_prop(owner, name, f):
@@ -69,6 +80,56 @@ def _scale_fcurve_values(fcurve, f):
     fcurve.update()
 
 
+def _scale_constraint(constraint, f):
+    for name in _LENGTH_CONSTRAINT_PROPS.get(constraint.type, ()):
+        _scale_prop(constraint, name, f)
+    if constraint.type == "CHILD_OF":
+        m = constraint.inverse_matrix.copy()
+        m.translation = m.translation * f
+        constraint.inverse_matrix = m
+    elif constraint.type == "TRANSFORM":
+        for prefix, mapped in (("from_", constraint.map_from), ("to_", constraint.map_to)):
+            if mapped == "LOCATION":
+                for name in _TRANSFORM_CONSTRAINT_RANGES:
+                    _scale_prop(constraint, prefix + name, f)
+    elif constraint.type == "ACTION" and constraint.transform_channel.startswith("LOCATION"):
+        constraint.min *= f
+        constraint.max *= f
+
+
+def _scale_node_group_inputs(obj, modifier, f, report):
+    """Scale inputs declared as distances; plain numbers may or may not be lengths, so only warn about those."""
+    group = modifier.node_group
+    if group is None:
+        return
+    unknown = []
+    for item in group.interface.items_tree:
+        if item.item_type != "SOCKET" or item.in_out != "INPUT":
+            continue
+        value = compat.node_modifier_input(modifier, item.identifier)
+        if value is None:
+            continue
+        subtype = getattr(item, "subtype", "")
+        if subtype in _SCALABLE_SOCKET_SUBTYPES:
+            scaled = [v * f for v in value] if hasattr(value, "__len__") else value * f
+            compat.set_node_modifier_input(modifier, item.identifier, scaled)
+        elif subtype == "NONE" and item.socket_type in ("NodeSocketFloat", "NodeSocketVector"):
+            unknown.append(item.name)
+    if unknown:
+        report.warning(f"'{obj.name}': check Geometry Nodes inputs of '{modifier.name}': {', '.join(unknown)}")
+
+
+def _scale_metaball(data, f):
+    data.resolution *= f
+    data.render_resolution *= f
+    for element in data.elements:
+        element.co = element.co * f
+        element.radius *= f
+        element.size_x *= f
+        element.size_y *= f
+        element.size_z *= f
+
+
 def _is_location_path(path):
     return path in _LOCATION_PATH_SUFFIXES or path.endswith(".location")
 
@@ -76,9 +137,9 @@ def _is_location_path(path):
 def convert_scene_to_cm(scene, report):
     """Scale every length in ``scene`` so that switching the unit scale to 0.01 keeps physical sizes.
 
-    Best effort: meshes, curves, armatures, lattices, empties, cameras, lights, object/bone locations,
-    common length-type modifier settings and location F-Curves. Linked data is left untouched (warning).
-    Returns the factor applied (1.0 when the scene already is in centimetres).
+    Covers meshes, curves, metaballs, armatures, lattices, empties, cameras, lights, object and bone locations,
+    length-type modifier and constraint settings, and location F-Curves. Whatever cannot be converted is reported
+    as a warning, linked data included. Returns the factor applied (1.0 when the scene already is in centimetres).
     """
     f = unit_factor(scene)
     if abs(f - 1.0) < 1e-6:
@@ -115,10 +176,18 @@ def convert_scene_to_cm(scene, report):
         if obj.pose is not None:
             for pb in obj.pose.bones:
                 pb.location = pb.location * f
+                for constraint in pb.constraints:
+                    _scale_constraint(constraint, f)
+        for constraint in obj.constraints:
+            _scale_constraint(constraint, f)
         for mod in obj.modifiers:
+            if mod.type == "NODES":
+                _scale_node_group_inputs(obj, mod, f, report)
             for name in _LENGTH_MODIFIER_PROPS.get(mod.type, ()):
                 if hasattr(mod, name):
                     _scale_prop(mod, name, f)
+        if len(obj.particle_systems):
+            report.warning(f"'{obj.name}' has particle systems; their sizes were not rescaled")
         ad = obj.animation_data
         if ad is not None:
             if ad.action is not None:
@@ -146,6 +215,8 @@ def convert_scene_to_cm(scene, report):
             data.transform(scale)
         elif obj.type == "LATTICE":
             data.transform(scale)
+        elif obj.type == "META":
+            _scale_metaball(data, f)
         elif obj.type == "CAMERA":
             data.clip_start *= f
             data.clip_end *= f

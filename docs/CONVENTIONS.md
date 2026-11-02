@@ -18,17 +18,21 @@ See the [user guide](USER_GUIDE.md) for the panel-by-panel walkthrough.
 | LOD | `Crate_LOD1`, `Crate_LOD2` (or role = LOD + index) | Interchange: `LOD0_SM_Crate`, `LOD1_SM_Crate`; legacy: LodGroup `SM_Crate` with `SM_Crate_LOD0`… |
 | Animation | action `Run` on armature `Hero` | `A_Hero_Run` |
 
-Prefixes are stripped before being re-applied (`SM_Crate` does not become `SM_SM_Crate`); `.001` suffixes are removed; characters Unreal rewrites (`.`, space, `/`, …) are replaced. Use *Export name* on the object to override the base name.
+Prefixes are stripped before being re-applied (`SM_Crate` does not become `SM_SM_Crate`); `.001` suffixes are removed; ASCII punctuation (`.`, space, `/`, …) is replaced, accents and non-Latin letters are kept. Use *Export name* on the object to override the base name.
+
+A curve, surface, text or metaball exports like a static mesh. A collection instance exports as one static mesh named after the instancer, joining the meshes of the collection.
+
+Hidden objects are skipped, including objects in excluded collections. Collision, LOD and socket objects follow their mesh even when hidden.
 
 Bone names must survive Unreal's sanitising (`spine.001` would become `spine_001`): the pre-flight check offers a one-click rename so Blender and Unreal use identical names.
 
 ## Skeletons
-- One root bone (`root` by convention). Root motion lives on the root bone; the armature *object* must not be animated.
+- One root bone (`root` by convention). Root motion lives on the root bone: Unreal ignores motion of the armature *object* and of its parents.
 - Bones exported: deform bones, bones tagged *Always export*, `ik_*` and `SOCKET_*` bones, plus their ancestors. Weights on other bones are merged into the nearest exported ancestor. At most *Max bone influences* (default 8) per vertex.
 - Blender-made rigs are exported with the X axis along the bone (Unreal/Maya convention). Rigs imported from Unreal keep their original convention (stored on the armature).
 - The temporary `Armature` null node is removed from the file, so the root bone is the FBX root (works for both Unreal importers and other engines).
 
-## Manual Unreal import settings (until the push-to-Unreal feature exists)
+## Manual Unreal import settings
 **Interchange (UE 5.8 default)**, in the import dialog:
 - Common Meshes: *Recompute Normals* **off**, *Recompute Tangents* on (MikkTSpace), *Bake Meshes* on, *Import LODs* on, *Import Sockets* on, Vertex Color *Replace*.
 - Static Meshes: *Combine Static Meshes* **Do Not Combine** (a combined MorennBridge file then yields one asset per node), *Import Collision According To Mesh Name* on, *One Convex Hull Per UCX* on, Nanite/lightmap UVs as you prefer.
@@ -39,4 +43,30 @@ Bone names must survive Unreal's sanitising (`spine.001` would become `spine_001
 **Legacy FBX importer** (set `Interchange.FeatureFlags.Import.FBX=0`): Normal Import Method *Import Normals* (and Tangents), *Import Mesh LODs* on, *Convert Scene Unit* on, *Force Front X Axis* off, *Auto Generate Collision* off when UCX pieces are provided. Several meshes in one file are named `<File>_<Node>` by this importer; use one file per asset.
 
 ## Manifest
-Every export writes `<batch>.morenn.json` next to the FBX files: which files were written, their kind, destination path, asset/node names, LOD/collision/socket counts, skeleton to reuse, animation range. The Unreal-side script consumes it; it is also handy for your own tooling.
+Every export writes `<batch>.morenn.json` next to the FBX files. The Unreal-side script consumes it, and your own tools can too. `<batch>` is the name of the .blend file.
+
+Top level:
+
+| Key | Content |
+|---|---|
+| `version` | Format version, currently 1. Raised on any change that breaks readers |
+| `generator`, `blender`, `created` | Add-on version, Blender version, ISO 8601 time |
+| `ue_importer` | `INTERCHANGE` or `LEGACY` |
+| `options` | Import options from the preferences: Nanite, lightmap UVs, physics asset, materials, textures, influence limit, frame alignment, tangents, saving, skeleton and physics prefixes, complex collision link |
+| `items` | One entry per FBX file |
+
+Each item:
+
+| Key | Content |
+|---|---|
+| `file`, `path` | File name and absolute path |
+| `kind` | `STATIC_MESH`, `SKELETAL_MESH` or `ANIMATION` |
+| `destination_path` | Unreal folder for the assets |
+| `single_asset` | True when the file yields one asset, named after the file |
+| `assets` | The assets inside the file, see below |
+| `lod_mode` | `LOD_NAMING` or `LODGROUP_NODES` |
+| `bone_axes`, `bone_axes_map` | Bone convention and per-bone exceptions (skeletal and animation files) |
+| `skeleton`, `root_bone`, `morph_targets`, `source_armature` | Skeletal and animation files |
+| `fps`, `frame_start`, `frame_end`, `stack` | Animation files |
+
+Each asset has `node` (the FBX node) and `name` (the Unreal asset). Static meshes add `lods`, `collisions`, `sockets`, and `collision_mesh` with `collision_ratio` when a collision mesh was generated. Generated collision meshes have `role` set to `COLLISION_MESH`. Skeletal meshes add `meshes` and `bones`.

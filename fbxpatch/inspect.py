@@ -25,10 +25,6 @@ def object_name(elem):
     return split_name_class(elem.props[1])[0] if len(elem.props) > 1 else b""
 
 
-def object_class(elem):
-    return split_name_class(elem.props[1])[1] if len(elem.props) > 1 else b""
-
-
 def object_subclass(elem):
     return elem.props[2] if len(elem.props) > 2 else b""
 

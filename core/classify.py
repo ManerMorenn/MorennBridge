@@ -9,6 +9,9 @@ KIND_STATIC = "STATIC_MESH"
 KIND_SKELETAL = "SKELETAL_MESH"
 KIND_ANIMATION = "ANIMATION"
 
+CONVERTIBLE_TYPES = frozenset({"CURVE", "SURFACE", "FONT", "META"})
+UNSUPPORTED_GEOMETRY_TYPES = frozenset({"CURVES", "POINTCLOUD", "VOLUME", "GREASEPENCIL"})
+
 
 @dataclass
 class AssetGroup:
@@ -44,6 +47,58 @@ class AssetGroup:
         return 1 + (max(self.lods) if self.lods else 0)
 
 
+@dataclass
+class SelectionSplit:
+    objects: list = field(default_factory=list)  # what the export works on
+    hidden: list = field(default_factory=list)
+    no_surface: list = field(default_factory=list)  # curves without bevel or extrusion, for example
+    unsupported: list = field(default_factory=list)
+
+
+def is_excluded(obj):
+    return obj.morenn.asset_type == "EXCLUDE" or not obj.morenn.enabled
+
+
+def is_collection_instance(obj):
+    return obj.type == "EMPTY" and obj.instance_type == "COLLECTION" and obj.instance_collection is not None
+
+
+def is_geometry_source(obj):
+    return obj.type == "MESH" or obj.type in CONVERTIBLE_TYPES or is_collection_instance(obj)
+
+
+def _has_surface(obj, depsgraph):
+    evaluated = obj.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh()
+    try:
+        return mesh is not None and len(mesh.polygons) > 0
+    finally:
+        evaluated.to_mesh_clear()
+
+
+def split_selection(objects, view_layer, depsgraph):
+    """Separate what can be exported from what is skipped, keeping the reason for the log.
+
+    Satellites stay in the result even when hidden: collision meshes are often hidden in the viewport.
+    """
+    split = SelectionSplit()
+    for obj in objects:
+        if is_excluded(obj):
+            continue
+        satellite = role_of(obj) in {"COLLISION", "LOD", "SOCKET"}
+        if obj.type in UNSUPPORTED_GEOMETRY_TYPES:
+            split.unsupported.append(obj)
+        elif not (is_geometry_source(obj) or obj.type == "ARMATURE"):
+            continue
+        elif not satellite and not obj.visible_get(view_layer=view_layer):
+            split.hidden.append(obj)
+        elif obj.type in CONVERTIBLE_TYPES and not _has_surface(obj, depsgraph):
+            split.no_surface.append(obj)
+        else:
+            split.objects.append(obj)
+    return split
+
+
 def armature_of(obj):
     """The armature deforming ``obj`` (first Armature modifier target, else armature parent)."""
     if obj.type != "MESH":
@@ -51,7 +106,7 @@ def armature_of(obj):
     for mod in obj.modifiers:
         if mod.type == "ARMATURE" and mod.object is not None:
             return mod.object
-    if obj.parent is not None and obj.parent.type == "ARMATURE":
+    if obj.parent is not None and obj.parent.type == "ARMATURE" and obj.parent_type != "BONE":
         return obj.parent
     return None
 
@@ -93,7 +148,7 @@ def _satellites(candidate, scene_objects):
     base_lod = naming.parse_lod_name(candidate.name)
     base_lod_name = base_lod[0] if base_lod and base_lod[1] == 0 else candidate.name
     for obj in scene_objects:
-        if obj == candidate or obj.morenn.asset_type == "EXCLUDE":
+        if obj == candidate or is_excluded(obj):
             continue
         role = role_of(obj)
         linked = obj.parent == candidate or obj.morenn.collision_of == candidate or obj.morenn.lod_of == candidate
@@ -132,7 +187,7 @@ def _kind_for(obj):
 def build_groups(objects, prefs, scene, mode="AUTO", destination=""):
     """Group ``objects`` into AssetGroups. ``mode`` in {'AUTO','STATIC','SKELETAL'}."""
     scene_objects = list(scene.objects)
-    selected = [o for o in objects if o.morenn.asset_type != "EXCLUDE" and o.type in {"MESH", "ARMATURE"}]
+    selected = [o for o in objects if not is_excluded(o) and (is_geometry_source(o) or o.type == "ARMATURE")]
     groups = []
     seen = set()
     for obj in selected:
@@ -146,7 +201,7 @@ def build_groups(objects, prefs, scene, mode="AUTO", destination=""):
             if arm is None:
                 kind = KIND_STATIC
         if kind == KIND_STATIC:
-            if obj.type != "MESH":
+            if not is_geometry_source(obj):
                 continue
             base, asset = _base_and_asset(obj, prefs, prefs.prefix_static)
             cols, socks, lods = _satellites(obj, scene_objects)
@@ -172,8 +227,9 @@ def build_groups(objects, prefs, scene, mode="AUTO", destination=""):
                 for o in scene_objects
                 if o.type == "MESH"
                 and armature_of(o) == arm
-                and o.morenn.asset_type != "EXCLUDE"
+                and not is_excluded(o)
                 and role_of(o) == "RENDER"
+                and o.visible_get()
             ]
             name_source = arm
             base, asset = _base_and_asset(name_source, prefs, prefs.prefix_skeletal)
@@ -236,7 +292,11 @@ def build_anim_groups(objects, prefs, scene, source="ACTIVE_ACTION", destination
     for arm in arms:
         rig_base, _ = _base_and_asset(arm, prefs, "")
         meshes = (
-            [o for o in scene_objects if o.type == "MESH" and armature_of(o) == arm and role_of(o) == "RENDER"]
+            [
+                o
+                for o in scene_objects
+                if o.type == "MESH" and armature_of(o) == arm and role_of(o) == "RENDER" and o.visible_get()
+            ]
             if include_mesh
             else []
         )

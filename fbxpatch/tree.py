@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Mutable FBX element tree: parse with ``io_scene_fbx.parse_fbx``, edit, write with ``encode_bin``."""
+"""Mutable FBX element tree: parse with ``_vendor.parse_fbx``, edit, write with ``_vendor.encode_bin``."""
 
 import array
-
-try:
-    from io_scene_fbx import data_types, encode_bin, parse_fbx
-except ImportError:
-    from ._vendor import data_types, encode_bin, parse_fbx  # type: ignore
+import os
+import struct
+import zlib
 
 import numpy as np
+
+from ._vendor import data_types, encode_bin, parse_fbx
 
 T_BOOL = data_types.BOOL
 T_CHAR = data_types.CHAR
@@ -36,6 +36,11 @@ _ARRAY_TYPECODES = {
     T_BYTE_ARRAY: data_types.ARRAY_BYTE,
 }
 NAME_SEP = b"\x00\x01"
+BINARY_MAGIC = b"Kaydara FBX Binary  \x00"
+
+
+class FbxFormatError(ValueError):
+    """The file cannot be read as FBX."""
 
 
 class Elem:
@@ -180,9 +185,19 @@ def _add_to_fbxelem(out, code, value):
 # ---------------------------------------------------------------------- file level
 
 
+def is_binary(path):
+    with open(path, "rb") as fh:
+        return fh.read(len(BINARY_MAGIC)) == BINARY_MAGIC
+
+
 def load(path):
     """Parse a binary FBX file. Returns ``(root Elem, version)``."""
-    parsed, version = parse_fbx.parse(path, use_namedtuple=True)
+    try:
+        parsed, version = parse_fbx.parse(path, use_namedtuple=True)
+    except (FileNotFoundError, PermissionError):
+        raise
+    except (OSError, EOFError, ValueError, IndexError, KeyError, struct.error, zlib.error) as exc:
+        raise FbxFormatError(f"'{os.path.basename(path)}' is damaged or incomplete ({exc})") from exc
     return Elem.from_parsed(parsed), version
 
 

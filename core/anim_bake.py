@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Bake the *visual* pose of a rig (constraints, drivers, NLA included) into a plain action."""
 
+import re
+
 import bpy
 import numpy as np
 
 from .. import compat
 
 PROPS = (("location", 3), ("rotation_quaternion", 4), ("scale", 3))
+_POSE_BONE_PATH = re.compile(r'^pose\.bones\["((?:[^"\\]|\\.)*)"\]')
 
 
 class ActionAssignment:
@@ -29,14 +32,14 @@ class ActionAssignment:
             self._saved = (
                 "restore",
                 ad.action,
-                getattr(ad, "action_slot", None),
+                ad.action_slot,
                 [(t, t.is_solo, t.mute) for t in ad.nla_tracks],
                 ad.use_nla,
             )
         if self.action is not None:
             ad.action = self.action
             slot = compat.slot_for_id(self.action, self.obj)
-            if slot is not None and hasattr(ad, "action_slot"):
+            if slot is not None:
                 ad.action_slot = slot
         if self.solo_track is not None:
             ad.action = None
@@ -56,7 +59,7 @@ class ActionAssignment:
             t.is_solo = solo
             t.mute = mute
         ad.action = action
-        if slot is not None and hasattr(ad, "action_slot"):
+        if slot is not None:
             try:
                 ad.action_slot = slot
             except (RuntimeError, TypeError):
@@ -137,14 +140,28 @@ def action_frame_range(action):
     return int(round(fr[0])), int(round(fr[1]))
 
 
+def bones_animated_by(action):
+    names = set()
+    for _slot, fc in compat.iter_fcurves(action):
+        match = _POSE_BONE_PATH.match(fc.data_path)
+        if match:
+            names.add(bpy.utils.unescape_identifier(match.group(1)))
+    return names
+
+
 def actions_for_armature(arm):
-    """Actions that animate pose bones (any slot): candidates for 'all actions' export."""
+    """Actions that belong to ``arm``: assigned to it, or unassigned and addressing only its bones."""
+    own = {action for action, _slot in compat.assigned_actions(arm)}
+    foreign = set()
+    for obj in bpy.data.objects:
+        if obj.type == "ARMATURE" and obj != arm:
+            foreign.update(action for action, _slot in compat.assigned_actions(obj))
+    known_bones = set(arm.pose.bones.keys())
     out = []
     for action in bpy.data.actions:
         if action.library is not None:
             continue
-        for _slot, fc in compat.iter_fcurves(action):
-            if fc.data_path.startswith("pose.bones"):
-                out.append(action)
-                break
+        animated = bones_animated_by(action)
+        if animated and (action in own or (action not in foreign and animated <= known_bones)):
+            out.append(action)
     return out

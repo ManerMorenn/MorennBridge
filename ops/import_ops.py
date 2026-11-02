@@ -6,7 +6,7 @@ from bpy.props import BoolProperty, CollectionProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
 from ..core import import_fbx
-from ..core.log import Report
+from ..core.log import Report, describe_error
 from ..prefs import get_prefs
 
 
@@ -42,24 +42,31 @@ class MORENN_OT_import_ue(bpy.types.Operator, ImportHelper):
         if not paths and self.filepath:
             paths = [self.filepath]
         imported = 0
-        for path in paths:
-            try:
-                res = import_fbx.import_file(
-                    context,
-                    path,
-                    prefs,
-                    report,
-                    convert_axes=self.convert_axes,
-                    tidy=self.tidy,
-                    reset_pose=self.reset_pose,
-                )
-                imported += 1
-                report.info(
-                    f"Imported {os.path.basename(path)}: {len(res.objects)} object(s), {len(res.actions)} action(s)",
-                    path,
-                )
-            except Exception as exc:
-                report.error(f"Import of '{os.path.basename(path)}' failed: {exc!r}")
+        wm = context.window_manager
+        wm.progress_begin(0, len(paths))
+        try:
+            for index, path in enumerate(paths):
+                wm.progress_update(index)
+                try:
+                    res = import_fbx.import_file(
+                        context,
+                        path,
+                        prefs,
+                        report,
+                        convert_axes=self.convert_axes,
+                        tidy=self.tidy,
+                        reset_pose=self.reset_pose,
+                    )
+                    imported += 1
+                    report.info(
+                        f"Imported {os.path.basename(path)}: "
+                        f"{len(res.objects)} object(s), {len(res.actions)} action(s)",
+                        path,
+                    )
+                except Exception as exc:
+                    report.error(f"Import of '{os.path.basename(path)}' failed: {describe_error(exc)}")
+        finally:
+            wm.progress_end()
         report.title = f"Import: {imported}/{len(paths)} file(s)"
         report.flush(context.scene, self)
         return {"FINISHED"} if imported else {"CANCELLED"}

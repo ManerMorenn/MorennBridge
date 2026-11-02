@@ -1,0 +1,37 @@
+name: Set up Blender
+description: Download a Blender build (cached) and expose its executable
+inputs:
+  version:
+    description: Release number, or daily:<branch>
+    required: true
+outputs:
+  executable:
+    description: Path of the Blender executable
+    value: ${{ steps.blender.outputs.executable }}
+runs:
+  using: composite
+  steps:
+    - name: Install runtime libraries
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libxkbcommon0 libxkbcommon-x11-0 libxi6 libxxf86vm1 libxfixes3 libxrender1 \
+          libgl1 libegl1 libglu1-mesa libsm6 libice6 libxcursor1 libxinerama1 libxrandr2
+
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: "3.11"
+
+    - name: Cache Blender
+      if: ${{ !startsWith(inputs.version, 'daily:') }}
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/blender-${{ inputs.version }}
+        key: blender-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+    - id: blender
+      name: Download Blender
+      shell: bash
+      run: python dev/ci/get_blender.py "${{ inputs.version }}" "$HOME/blender-${{ inputs.version }}" >> "$GITHUB_OUTPUT"

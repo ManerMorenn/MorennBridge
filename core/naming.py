@@ -7,12 +7,14 @@ legacy importer's set).
 """
 
 import re
+import unicodedata
 
 # Characters Interchange replaces with '_' (INVALID_OBJECTNAME_CHARACTERS); space -> '-', '+' -> '_'.
 UE_INVALID_CHARS = frozenset("' ,/.:|&!~\n\r\t@#(){}[]=;^%$`")
 COLLISION_PREFIXES = ("UCX", "UBX", "USP", "UCP", "MCDCX")
 SOCKET_PREFIX = "SOCKET_"
 
+_ASCII_PUNCTUATION = re.compile(r"[\x00-\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f]")
 _NUMERIC_SUFFIX = re.compile(r"\.\d{3,}$")
 _LOD_SUFFIX = re.compile(r"^(?P<base>.+)_LOD(?P<index>\d+)$", re.IGNORECASE)
 _LOD_PREFIX = re.compile(r"^LOD(?P<index>\d+)_(?P<base>.+)$", re.IGNORECASE)
@@ -36,8 +38,8 @@ def strip_numeric_suffix(name):
 
 
 def sanitize_asset_name(name):
-    """Conservative asset-name sanitiser: ``[A-Za-z0-9_]`` only, no runs of ``_``, no leading digit."""
-    out = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    """ASCII punctuation becomes ``_``, no runs of ``_``, no leading digit. Non-ASCII letters are kept."""
+    out = _ASCII_PUNCTUATION.sub("_", unicodedata.normalize("NFC", name))
     out = re.sub(r"_+", "_", out).strip("_")
     if not out:
         out = "Asset"

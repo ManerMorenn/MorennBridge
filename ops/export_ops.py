@@ -6,7 +6,7 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty
 
 from ..core import classify, export_fbx, naming, validate
-from ..core.log import Report
+from ..core.log import Report, describe_error
 from ..prefs import get_prefs
 
 MODE_ITEMS = [
@@ -34,8 +34,23 @@ def selected_objects(context):
     except AttributeError:
         objs = []
     if not objs:
-        objs = [o for o in context.view_layer.objects if o.select_get()]
+        objs = [o for o in context.view_layer.objects if o.select_get() and o.visible_get()]
     return objs
+
+
+def _log_skipped(split, report):
+    if split.hidden:
+        report.info(f"Hidden, not exported: {_names(split.hidden)}")
+    if split.no_surface:
+        report.warning(f"No surface to export (add a bevel or extrusion): {_names(split.no_surface)}")
+    if split.unsupported:
+        report.warning(f"Cannot be exported as meshes: {_names(split.unsupported)}")
+
+
+def _names(objects, limit=6):
+    names = [o.name for o in objects[:limit]]
+    extra = len(objects) - limit
+    return ", ".join(names) + (f" and {extra} more" if extra > 0 else "")
 
 
 def batch_name():
@@ -52,7 +67,7 @@ class MORENN_OT_export_ue(bpy.types.Operator):
 
     mode: EnumProperty(name="Mode", items=MODE_ITEMS, default="AUTO")
     scope: EnumProperty(name="Scope", items=SCOPE_ITEMS, default="SELECTED")
-    force: BoolProperty(name="Export despite errors", default=False)
+    force: BoolProperty(name="Export despite errors", default=False, options={"SKIP_SAVE"})
 
     @classmethod
     def poll(cls, context):
@@ -66,6 +81,11 @@ class MORENN_OT_export_ue(bpy.types.Operator):
             objects = list(context.view_layer.active_layer_collection.collection.all_objects)
         else:
             objects = selected_objects(context)
+        split = classify.split_selection(objects, context.view_layer, context.evaluated_depsgraph_get())
+        if self.mode != "ANIMATION":
+            _log_skipped(split, report)
+        objects = split.objects
+        scene.morenn.last_export_mode, scene.morenn.last_export_scope = self.mode, self.scope
         settings = export_fbx.ExportSettings.from_prefs(prefs, scene)
         settings.export_dir = resolve_export_dir(scene.morenn.export_dir, report)
         settings.batch_name = batch_name()
@@ -92,23 +112,28 @@ class MORENN_OT_export_ue(bpy.types.Operator):
         issues = validate.run(context, groups, prefs)
         validate.store(scene, issues)
         for issue in issues:
-            if issue.severity == "ERROR":
+            if issue.severity == "ERROR" and not self.force:
                 report.error(f"{issue.code}: {issue.message}")
-            elif issue.severity == "WARNING":
+            elif issue.severity != "INFO":
                 report.warning(f"{issue.code}: {issue.message}")
         if validate.has_errors(issues) and not self.force:
-            report.error(
-                "Export aborted: fix the errors listed in the Pre-flight panel (or use 'Export despite errors')"
-            )
+            report.error("Export aborted: fix the errors in the Pre-flight panel, or use Export Anyway there")
             report.flush(scene, self)
             return {"CANCELLED"}
         done, manifest_path = export_fbx.export_groups(context, groups, settings, report)
         if manifest_path:
             scene.morenn.last_manifest = manifest_path
         report.title = f"Export: {len(done)} file(s)"
+        push = done and scene.morenn.push_after_export
+        if push and not len(context.window_manager.morenn_rt.ue_nodes):
+            report.warning("Not pushed to Unreal: no editor found yet, use Find Unreal in the Unreal Link panel")
+            push = False
         report.flush(scene, self)
-        if done and scene.morenn.push_after_export and len(context.window_manager.morenn_rt.ue_nodes):
-            bpy.ops.morenn.ue_push()
+        if push:
+            try:
+                bpy.ops.morenn.ue_push()
+            except RuntimeError as exc:
+                self.report({"ERROR"}, f"Push to Unreal failed: {describe_error(exc)}")
         return {"FINISHED"} if done else {"CANCELLED"}
 
 

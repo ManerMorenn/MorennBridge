@@ -116,6 +116,101 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class ImportedStaticTests(unittest.TestCase):
+    def setUp(self):
+        fixtures.fresh_scene(cm=True)
+        self.tmp = fixtures.temp_dir()
+        self.import_fbx = fixtures.addon_module("core.import_fbx")
+        self.prefs = fixtures.addon_module("prefs").get_prefs()
+        self.Report = fixtures.addon_module("core.log").Report
+
+    def import_file(self, path, **kwargs):
+        fixtures.fresh_scene(cm=True)
+        report = self.Report()
+        result = self.import_fbx.import_file(bpy.context, path, self.prefs, report, **kwargs)
+        self.assertTrue(report.ok, fixtures.report_text(report))
+        return result
+
+    def test_lod_group_becomes_a_lod_chain(self):
+        crate = fixtures.make_cube("Crate", size=100.0)
+        fixtures.make_cube("Crate_LOD1", size=90.0)
+        done, _, _report = fixtures.run_export([crate], self.tmp, lod_mode="LODGROUP_NODES")
+        self.import_file(done[0].path)
+        self.assertEqual(sorted(o.name for o in bpy.data.objects), ["SM_Crate", "SM_Crate_LOD1"])
+        base = bpy.data.objects["SM_Crate"]
+        lod = bpy.data.objects["SM_Crate_LOD1"]
+        self.assertEqual(base.type, "MESH")
+        self.assertIsNone(lod.parent)
+        self.assertEqual((lod.morenn.role, lod.morenn.lod_index, lod.morenn.lod_of), ("LOD", 1, base))
+
+    def test_collision_mesh_is_attached_to_its_body(self):
+        crate = fixtures.make_cube("Crate", size=100.0)
+        fixtures.make_cube("UCX_Crate_01", size=100.0)
+        done, _, _report = fixtures.run_export([crate], self.tmp)
+        self.import_file(done[0].path)
+        body = bpy.data.objects["SM_Crate"]
+        collision = bpy.data.objects["UCX_SM_Crate_01"]
+        self.assertEqual(collision.morenn.role, "COLLISION")
+        self.assertEqual(collision.morenn.collision_type, "UCX")
+        self.assertEqual(collision.morenn.collision_of, body)
+        self.assertEqual(collision.parent, body)
+        self.assertEqual(collision.display_type, "WIRE")
+
+    def test_imported_static_mesh_exports_again_under_the_same_name(self):
+        crate = fixtures.make_cube("Crate", size=100.0)
+        fixtures.make_cube("UCX_Crate_01", size=100.0)
+        done, _, _report = fixtures.run_export([crate], self.tmp)
+        self.import_file(done[0].path)
+        second, _, report = fixtures.run_export([bpy.data.objects["SM_Crate"]], fixtures.temp_dir())
+        self.assertTrue(report.ok, fixtures.report_text(report))
+        root, _ = fixtures.fbx_load(second[0].path)
+        self.assertEqual(set(fixtures.fbx_models(root)), {"SM_Crate", "UCX_SM_Crate_01"})
+
+    def test_socket_survives_import(self):
+        crate = fixtures.make_cube("Crate", size=100.0)
+        fixtures.make_empty("SOCKET_Lid", parent=crate)
+        done, _, _report = fixtures.run_export([crate], self.tmp)
+        result = self.import_file(done[0].path)
+        self.assertIn("SOCKET_Lid", [o.name for o in result.objects])
+
+    def test_tidy_off_keeps_helper_nodes(self):
+        rig, _body = _rigged_character("Hero")
+        done, _, _report = fixtures.run_export([rig], self.tmp)
+        result = self.import_file(done[0].path, tidy=False)
+        self.assertNotEqual(result.armatures[0].name, "SKM_Hero")
+
+    def test_axis_conversion_off_keeps_raw_joints(self):
+        rig, _body = _rigged_character("Hero")
+        done, _, _report = fixtures.run_export([rig], self.tmp)
+        result = self.import_file(done[0].path, convert_axes=False)
+        self.assertFalse(result.armatures[0].data.morenn.axes_converted)
+
+    def test_scene_units_rescale_everything_imported(self):
+        crate = fixtures.make_cube("Crate", size=100.0)
+        fixtures.make_empty("SOCKET_Lid", location=(0, 0, 50), parent=crate)
+        done, _, _report = fixtures.run_export([crate], self.tmp)
+        fixtures.fresh_scene(cm=False)
+        report = self.Report()
+        self.import_fbx.import_file(bpy.context, done[0].path, self.prefs, report)
+        self.assertIn("not in centimetres", fixtures.report_text(report))
+        self.assertAlmostEqual(max(v.co.x for v in bpy.data.objects["SM_Crate"].data.vertices), 0.5, places=4)
+        self.assertAlmostEqual(bpy.data.objects["SOCKET_Lid"].location.z, 0.5, places=4)
+
+    def test_unreal_take_is_renamed_after_the_file(self):
+        action = bpy.data.actions.new("Unreal Take")
+        result = self.import_fbx.ImportResult("x.fbx", self.import_fbx.ImportInfo(), actions=[action])
+        report = self.Report()
+        self.import_fbx._rename_actions(result, "A_Run", report)
+        self.assertEqual(action.name, "A_Run")
+        self.assertTrue(action.use_fake_user)
+
+    def test_several_takes_keep_their_names(self):
+        first, second = bpy.data.actions.new("Unreal Take"), bpy.data.actions.new("Take 001")
+        result = self.import_fbx.ImportResult("x.fbx", self.import_fbx.ImportInfo(), actions=[first, second])
+        self.import_fbx._rename_actions(result, "A_Run", self.Report())
+        self.assertEqual({first.name, second.name}, {"A_Run_Unreal Take", "A_Run_Take 001"})
+
+
 class MirroredChainTests(unittest.TestCase):
     """A chain whose middle bone points away from its child (the UE4/ALS mannequin right arm / left leg case)."""
 

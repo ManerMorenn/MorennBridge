@@ -10,7 +10,19 @@ def selected_groups(context, mode="AUTO"):
     from .export_ops import selected_objects
 
     prefs = get_prefs(context)
-    return classify.build_groups(selected_objects(context), prefs, context.scene, mode=mode)
+    split = classify.split_selection(selected_objects(context), context.view_layer, context.evaluated_depsgraph_get())
+    return classify.build_groups(split.objects, prefs, context.scene, mode=mode)
+
+
+def _issue_from_item(item):
+    return validate.Issue(item.code, item.severity, item.message, item.object_name, item.bone_name, item.fix_id)
+
+
+def _revalidate():
+    try:
+        bpy.ops.morenn.validate()
+    except RuntimeError:  # raised when the remaining issues include errors; the list is updated regardless
+        pass
 
 
 class MORENN_OT_validate(bpy.types.Operator):
@@ -45,15 +57,9 @@ class MORENN_OT_fix_issue(bpy.types.Operator):
         index = self.index if self.index >= 0 else s.issues_index
         if not (0 <= index < len(s.issues)):
             return {"CANCELLED"}
-        item = s.issues[index]
-        entry = validate.FIXERS.get(item.fix_id)
-        if entry is None:
-            self.report({"WARNING"}, "No automatic fix for this issue")
-            return {"CANCELLED"}
-        issue = validate.Issue(item.code, item.severity, item.message, item.object_name, item.bone_name, item.fix_id)
-        ok = entry[1](context, issue)
-        self.report({"INFO" if ok else "WARNING"}, f"{entry[0]}: {'done' if ok else 'nothing changed'}")
-        bpy.ops.morenn.validate()
+        changed, message = validate.apply_fix(context, _issue_from_item(s.issues[index]))
+        self.report({"INFO" if changed else "WARNING"}, message)
+        _revalidate()
         return {"FINISHED"}
 
 
@@ -65,19 +71,20 @@ class MORENN_OT_fix_all(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        s = context.scene.morenn
         done = 0
-        for item in list(s.issues):
-            entry = validate.FIXERS.get(item.fix_id)
-            if entry is None:
+        failures = []
+        for item in list(context.scene.morenn.issues):
+            if not item.fix_id:
                 continue
-            issue = validate.Issue(
-                item.code, item.severity, item.message, item.object_name, item.bone_name, item.fix_id
-            )
-            if entry[1](context, issue):
-                done += 1
-        bpy.ops.morenn.validate()
-        self.report({"INFO"}, f"{done} fix(es) applied")
+            changed, message = validate.apply_fix(context, _issue_from_item(item))
+            done += bool(changed)
+            if "failed" in message:
+                failures.append(message)
+        _revalidate()
+        if failures:
+            self.report({"WARNING"}, f"{done} fix(es) applied, {len(failures)} failed: {failures[0]}")
+        else:
+            self.report({"INFO"}, f"{done} fix(es) applied")
         return {"FINISHED"}
 
 

@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 dist/
 /site/
+.coverage
 *.zip
 *.blend1
 docs/images/_crops.json

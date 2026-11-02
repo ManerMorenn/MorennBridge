@@ -3,7 +3,7 @@
 
 __version__ = "0.1.0"
 
-from . import ops, prefs, props, ui  # noqa: E402  (the version must exist before the submodules import it)
+from . import ops, prefs, props, ui
 
 _MODULES = (props, prefs, ops, ui)
 

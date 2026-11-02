@@ -11,6 +11,7 @@ from ..fbxpatch import patches, tree
 from . import anim_bake, bones, classify, naming, staging
 from . import manifest as manifest_mod
 from .classify import KIND_ANIMATION, KIND_SKELETAL, KIND_STATIC
+from .log import describe_error
 
 MARKER_AXES = "MorennBridge|BoneAxes"
 MARKER_AXES_MAP = "MorennBridge|BoneAxesMap"
@@ -443,7 +444,6 @@ def bone_axes_for(arm_obj, settings):
 
 def export_file(context, exported, settings, report):
     """Stage, export and post-process one ExportedFile. Raises StagingError on failure."""
-    os.makedirs(os.path.dirname(exported.path) or ".", exist_ok=True)
     lod_mode = settings.resolved_lod_mode
     node_names = []
     with staging.Staging(context, report) as st:
@@ -499,7 +499,15 @@ def export_file(context, exported, settings, report):
 def export_groups(context, groups, settings, report):
     """Export every group; returns ``(exported_files, manifest_path)``."""
     if not groups:
-        report.error("Nothing to export: select meshes or armatures")
+        report.error("Nothing to export: select meshes, curves, text, armatures or collection instances")
+        return [], None
+    if not compat.fbx_exporter_available():
+        report.error("Blender's FBX add-on is disabled: enable 'FBX format' in Preferences > Add-ons")
+        return [], None
+    try:
+        os.makedirs(settings.export_dir, exist_ok=True)
+    except OSError as exc:
+        report.error(f"Cannot use the export folder: {describe_error(exc)}")
         return [], None
     if (
         settings.file_mode == "COMBINED"
@@ -538,34 +546,42 @@ def export_groups(context, groups, settings, report):
 
     manifest = manifest_mod.new_manifest(settings.prefs, settings.ue_importer)
     done = []
-    for ef in files:
-        try:
-            if ef.extra.get("collision_only"):
-                _export_collision_only(context, ef, settings, report)
-            else:
-                export_file(context, ef, settings, report)
-        except staging.StagingError as exc:
-            report.error(str(exc))
-            _remove_quietly(ef.path)
-            continue
-        except Exception as exc:
-            report.error(f"Export of '{os.path.basename(ef.path)}' failed: {exc!r}")
-            _remove_quietly(ef.path)
-            continue
-        dest = ef.groups[0].destination_path or settings.destination_path
-        extra = {"lod_mode": settings.resolved_lod_mode}
-        extra.update(ef.extra)
-        if ef.kind == KIND_SKELETAL:
-            extra["skeleton"] = ef.groups[0].armature.data.morenn.ue_skeleton_path or None
-            extra["root_bone"] = ef.assets[0].get("root_bone", "")
-            extra["morph_targets"] = ef.assets[0].get("morph_targets", False)
-        elif ef.kind == KIND_ANIMATION:
-            extra["skeleton"] = ef.groups[0].armature.data.morenn.ue_skeleton_path or None
-        if ef.groups[0].armature is not None:
-            extra["source_armature"] = ef.groups[0].armature.name
-        manifest_mod.add_item(manifest, ef.path, ef.kind, dest, ef.assets, ef.single_asset, **extra)
-        done.append(ef)
-        report.info(f"Exported {os.path.basename(ef.path)} ({', '.join(a['name'] for a in ef.assets)})", ef.path)
+    wm = context.window_manager
+    wm.progress_begin(0, len(files))
+    try:
+        for index, ef in enumerate(files):
+            wm.progress_update(index)
+            replacing = os.path.exists(ef.path)
+            try:
+                if ef.extra.get("collision_only"):
+                    _export_collision_only(context, ef, settings, report)
+                else:
+                    export_file(context, ef, settings, report)
+            except staging.StagingError as exc:
+                report.error(str(exc))
+                _remove_quietly(ef.path)
+                continue
+            except Exception as exc:
+                report.error(f"Export of '{os.path.basename(ef.path)}' failed: {describe_error(exc)}")
+                _remove_quietly(ef.path)
+                continue
+            dest = ef.groups[0].destination_path or settings.destination_path
+            extra = {"lod_mode": settings.resolved_lod_mode}
+            extra.update(ef.extra)
+            if ef.kind == KIND_SKELETAL:
+                extra["skeleton"] = ef.groups[0].armature.data.morenn.ue_skeleton_path or None
+                extra["root_bone"] = ef.assets[0].get("root_bone", "")
+                extra["morph_targets"] = ef.assets[0].get("morph_targets", False)
+            elif ef.kind == KIND_ANIMATION:
+                extra["skeleton"] = ef.groups[0].armature.data.morenn.ue_skeleton_path or None
+            if ef.groups[0].armature is not None:
+                extra["source_armature"] = ef.groups[0].armature.name
+            manifest_mod.add_item(manifest, ef.path, ef.kind, dest, ef.assets, ef.single_asset, **extra)
+            done.append(ef)
+            verb = "Replaced" if replacing else "Exported"
+            report.info(f"{verb} {os.path.basename(ef.path)} ({', '.join(a['name'] for a in ef.assets)})", ef.path)
+    finally:
+        wm.progress_end()
     manifest_path = None
     if done:
         manifest_path = manifest_mod.write(
@@ -576,7 +592,6 @@ def export_groups(context, groups, settings, report):
 
 
 def _export_collision_only(context, exported, settings, report):
-    os.makedirs(os.path.dirname(exported.path) or ".", exist_ok=True)
     group = exported.groups[0]
     render = group.render[0]
     anchor = staging.translation_removed(render.matrix_world)

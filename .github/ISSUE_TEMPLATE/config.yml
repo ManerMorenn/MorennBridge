@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://morennbridge.manermorenn.com
+    about: The user guide, issue codes and FAQ.
+  - name: Questions
+    url: https://github.com/ManerMorenn/MorennBridge/discussions
+    about: Ask how to do something.

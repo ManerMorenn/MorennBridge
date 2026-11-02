@@ -1,9 +1,11 @@
 # Unreal Engine setup for MorennBridge
 
-## 1. Importing the files (any UE 5.x)
+Written for UE 5.8 from the engine source. See [Support](SUPPORT.md) for what has been confirmed so far.
+
+## 1. Importing the files
 Drop the exported `.fbx` files into the Content Browser. The files are already in Unreal's axis system and in
-centimetres, so the defaults mostly work. The settings that matter are listed in `CONVENTIONS.md`
-("Manual Unreal import settings").
+centimetres, so the defaults mostly work. The settings that matter are listed in
+[Conventions](CONVENTIONS.md#manual-unreal-import-settings).
 
 Recommended folder layout: `/Game/<Project>/Props/SM_*`, `/Game/<Project>/Characters/<Name>/SKM_* | SKEL_* | PHYS_*`,
 `/Game/<Project>/Characters/<Name>/Animations/A_*`. The `destination_path` of each item in the `.morenn.json`
@@ -34,6 +36,9 @@ manifest records where MorennBridge expects the asset.
 5. **Blender**: Preferences → System → *Allow Online Access* must be enabled, otherwise the add-on refuses to open sockets.
 6. In Blender's *Unreal Link* panel click *Find Unreal*; the project name appears in the list. Export with
    *Push to Unreal after export* enabled, or push the last export manually.
+
+While remote execution is on, any program on this machine can run Python in the editor. Keep the TTL at `0`, and
+turn the setting off on shared machines.
 
 ## 3. Legacy FBX importer (optional)
 UE 5.8 imports FBX through Interchange. To use the legacy importer instead, add to `DefaultEngine.ini`:

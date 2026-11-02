@@ -6,6 +6,7 @@ import bpy
 from bpy.props import EnumProperty, FloatProperty, StringProperty
 from mathutils import Matrix, Vector
 
+from .. import compat
 from ..core import naming
 from ..props import COLLISION_TYPE_ITEMS, ROLE_ITEMS
 
@@ -201,20 +202,15 @@ class MORENN_OT_convert_bone_axes(bpy.types.Operator):
             K = {name: C for name, C in bones.matrices_for(axes_map, inverse=True).items()}
             bones.clear_bone_axes(arm)
             m.axes_converted = False
+        euler_bones = {pb.name: pb.rotation_mode for pb in arm.pose.bones if len(pb.rotation_mode) == 3}
         bones.convert_rest_axes(context, arm, K)
         bones.conjugate_pose(arm, K)
         names = {b.name for b in arm.data.bones}
-        actions = set()
-        ad = arm.animation_data
-        if ad is not None:
-            if ad.action is not None:
-                actions.add(ad.action)
-            for t in ad.nla_tracks:
-                for s in t.strips:
-                    if s.action is not None:
-                        actions.add(s.action)
+        actions = {action for action, _slot in compat.assigned_actions(arm)}
         for action in actions:
-            bones.conjugate_bone_fcurves(action, K)
+            bones.conjugate_bone_fcurves(action, K, rotation_orders=euler_bones)
+        for name in euler_bones:
+            arm.pose.bones[name].rotation_mode = "QUATERNION"
         self.report({"INFO"}, f"{len(names)} bones converted, {len(actions)} action(s) updated")
         return {"FINISHED"}
 

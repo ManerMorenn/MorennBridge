@@ -4,13 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{doc_title}}</title>
-  <meta name="description" content="{{title}}. {{subtitle}}">
+  <meta name="description" content="{{description}}">
+  <link rel="canonical" href="{{canonical}}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="MorennBridge">
+  <meta property="og:title" content="{{doc_title}}">
+  <meta property="og:description" content="{{description}}">
+  <meta property="og:url" content="{{canonical}}">
+  <meta property="og:image" content="{{site}}/social.png">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="{{prefix}}favicon.svg" type="image/svg+xml">
   <link rel="icon" href="{{prefix}}favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="{{prefix}}apple-touch-icon.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@200;300;400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{prefix}}style.css">
 {{fonts}}</head>
 <body>
@@ -54,8 +59,9 @@
         <a href="{{repo}}/releases" rel="noopener">Releases</a>
         <a href="{{repo}}/issues" rel="noopener">Issues</a>
         <a href="{{repo}}/blob/main/LICENSE" rel="noopener">License</a>
+        <a href="{{prefix}}support/#privacy-and-security">Privacy</a>
       </p>
-      <p class="copyright">Maner Morenn</p>
+      <p class="copyright"><a href="https://manermorenn.com" rel="noopener">Maner Morenn</a></p>
     </div>
   </footer>
   <script>

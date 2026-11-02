@@ -1,6 +1,7 @@
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+extend-exclude = ["fbxpatch/_vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
@@ -12,7 +13,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
+"__init__.py" = ["F401", "E402"]  # the version must exist before the submodules import it
 "ops/__init__.py" = ["F401"]
 "ui/__init__.py" = ["F401"]
 "ue/scripts/*" = ["E402"]   # sys.path setup must precede the unreal/mb_ue_common imports
@@ -20,3 +21,11 @@ ignore = [
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.coverage.run]
+branch = true
+omit = ["*/tests/*", "*/dev/*", "*/site/*", "*/dist/*", "*/_vendor/*"]
+
+[tool.coverage.report]
+fail_under = 85
+skip_empty = true

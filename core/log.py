@@ -2,8 +2,24 @@
 """Operation reports: collected during an operation, then flushed to the scene log and the operator."""
 
 import datetime
+import traceback
 
 LEVEL_ORDER = {"INFO": 0, "WARNING": 1, "ERROR": 2}
+MAX_LOG_ENTRIES = 1000
+
+
+def describe_error(exc):
+    """A readable reason for an exception caught at an operator boundary."""
+    if isinstance(exc, PermissionError):
+        return f"permission denied for '{exc.filename}'"
+    if isinstance(exc, FileNotFoundError):
+        return f"'{exc.filename}' does not exist"
+    if isinstance(exc, OSError) and exc.strerror:
+        return f"{exc.strerror} ('{exc.filename}')" if exc.filename else exc.strerror
+    if isinstance(exc, ValueError):
+        return str(exc)
+    traceback.print_exception(exc)
+    return f"unexpected {type(exc).__name__}: {exc} (details in the system console)"
 
 
 class Entry:
@@ -81,5 +97,7 @@ def add_scene_entry(scene, level, message, path=""):
     entry.level = level if level in LEVEL_ORDER else "INFO"
     entry.message = message
     entry.path = path or ""
+    while len(settings.log) > MAX_LOG_ENTRIES:
+        settings.log.remove(0)
     settings.log_index = len(settings.log) - 1
-    return entry
+    return settings.log[-1]

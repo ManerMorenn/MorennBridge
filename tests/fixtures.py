@@ -37,6 +37,8 @@ def fresh_scene(cm=False):
         bpy.data.collections,
         bpy.data.images,
         bpy.data.lattices,
+        bpy.data.metaballs,
+        bpy.data.node_groups,
     ]:
         for block in list(coll):
             coll.remove(block)
@@ -161,6 +163,96 @@ def make_empty(name, location=(0, 0, 0), parent=None):
     return obj
 
 
+def make_curve(name="Pipe", bevel=0.5):
+    curve = bpy.data.curves.new(name, "CURVE")
+    curve.dimensions = "3D"
+    curve.bevel_depth = bevel
+    spline = curve.splines.new("POLY")
+    spline.points.add(2)
+    for point, co in zip(spline.points, ((0, 0, 0, 1), (10, 0, 0, 1), (10, 10, 0, 1))):
+        point.co = co
+    return link(bpy.data.objects.new(name, curve))
+
+
+def make_text(name="Sign", body="Hi"):
+    text = bpy.data.curves.new(name, "FONT")
+    text.body = body
+    return link(bpy.data.objects.new(name, text))
+
+
+def make_metaball(name="Blob"):
+    meta = bpy.data.metaballs.new(name)
+    meta.elements.new()
+    return link(bpy.data.objects.new(name, meta))
+
+
+def new_geometry_group(name="GN"):
+    group = bpy.data.node_groups.new(name, "GeometryNodeTree")
+    group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    group.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    return group, group.nodes.new("NodeGroupInput"), group.nodes.new("NodeGroupOutput")
+
+
+def add_instance_modifier(obj):
+    """Geometry Nodes modifier that replaces ``obj`` by instances of itself on a mesh line (10 points)."""
+    group, source, output = new_geometry_group()
+    line = group.nodes.new("GeometryNodeMeshLine")
+    instances = group.nodes.new("GeometryNodeInstanceOnPoints")
+    group.links.new(line.outputs[0], instances.inputs["Points"])
+    group.links.new(source.outputs[0], instances.inputs["Instance"])
+    group.links.new(instances.outputs[0], output.inputs[0])
+    modifier = obj.modifiers.new("GN", "NODES")
+    modifier.node_group = group
+    return modifier
+
+
+def add_empty_geometry_modifier(obj):
+    group, _source, _output = new_geometry_group()
+    modifier = obj.modifiers.new("GN", "NODES")
+    modifier.node_group = group
+    return modifier
+
+
+def make_collection_instance(name="Kit", members=1, offset=(0, 0, 0), location=(0, 0, 0)):
+    """Collection of cubes (not in the scene) plus the empty that instances it."""
+    collection = bpy.data.collections.new(f"{name}_Collection")
+    collection.instance_offset = offset
+    for i in range(members):
+        cube = make_cube(f"{name}_Member{i}", size=2.0, location=(10.0 + i * 10.0, 0, 0))
+        bpy.context.scene.collection.objects.unlink(cube)
+        collection.objects.link(cube)
+    empty = bpy.data.objects.new(name, None)
+    empty.instance_type = "COLLECTION"
+    empty.instance_collection = collection
+    empty.location = location
+    return link(empty)
+
+
+def select_only(*objects):
+    for obj in bpy.context.view_layer.objects:
+        obj.select_set(False)
+    for obj in objects:
+        obj.select_set(True)
+    if objects:
+        bpy.context.view_layer.objects.active = objects[0]
+
+
+def call(operator, **kwargs):
+    """Run an operator. In background mode an ERROR report raises; that counts as cancelled here."""
+    try:
+        return operator(**kwargs)
+    except RuntimeError:
+        return {"CANCELLED"}
+
+
+def log_text():
+    return "\n".join(f"{entry.level}: {entry.message}" for entry in bpy.context.scene.morenn.log)
+
+
+def report_text(report):
+    return "\n".join(str(entry) for entry in report.entries)
+
+
 def export_settings(export_dir, **overrides):
     """ExportSettings built from the default preferences plus overrides."""
     prefs = addon_module("prefs").get_prefs()
@@ -207,6 +299,16 @@ def fbx_geometry_for_model(root, model_elem):
     return None
 
 
+def fbx_vertices(geometry):
+    flat = geometry.find(b"Vertices").props[0]
+    return [tuple(flat[i : i + 3]) for i in range(0, len(flat), 3)]
+
+
+def fbx_materials(root):
+    insp = addon_module("fbxpatch.inspect")
+    return {insp.object_name(m).decode() for m in insp.find_objects(root, b"Material")}
+
+
 def fbx_polygon_count(geometry):
     idx = geometry.find(b"PolygonVertexIndex")
     if idx is None:
@@ -220,6 +322,7 @@ def no_temp_leftovers():
     names += [m.name for m in bpy.data.meshes if m.name.startswith("MB__")]
     names += [s.name for s in bpy.data.scenes if s.name.startswith("MB_EXPORT")]
     names += [c.name for c in bpy.data.collections if c.name.startswith("MB_EXPORT")]
+    names += [g.name for g in bpy.data.node_groups if g.name.startswith("MB__")]
     return not names, names
 
 

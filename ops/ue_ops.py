@@ -10,7 +10,7 @@ from bpy.props import StringProperty
 
 from .. import compat
 from ..core import import_fbx
-from ..core.log import Report
+from ..core.log import Report, describe_error
 from ..prefs import get_prefs
 from ..ue import remote
 
@@ -231,7 +231,7 @@ class MORENN_OT_ue_pull(bpy.types.Operator):
                         arm.data.morenn.ue_skeleton_path = item["skeleton"]
                 report.info(f"Imported {os.path.basename(item['file'])}", item["file"])
             except Exception as exc:
-                report.error(f"Import of {item['file']} failed: {exc!r}")
+                report.error(f"Import of {item['file']} failed: {describe_error(exc)}")
         report.title = f"Pull: {imported} asset(s)"
         report.flush(context.scene, self)
         return {"FINISHED"} if imported else {"CANCELLED"}

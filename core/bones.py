@@ -12,7 +12,7 @@ import re
 
 import bpy
 import numpy as np
-from mathutils import Matrix, Vector
+from mathutils import Euler, Matrix, Vector
 
 from .. import compat
 
@@ -294,8 +294,12 @@ def _permute_vector_channels(channels, perm, sign, scale_values=True):
     return True
 
 
-def conjugate_bone_fcurves(action, K, report=None, bone_names=None):
-    """Transform bone-space F-Curves of ``action`` for a rest change ``M' = M @ K`` (``K``: matrix or per-bone map)."""
+def conjugate_bone_fcurves(action, K, report=None, bone_names=None, rotation_orders=None):
+    """Transform bone-space F-Curves of ``action`` for a rest change ``M' = M @ K`` (``K``: matrix or per-bone map).
+
+    Euler keys cannot be permuted and become quaternion keys; ``rotation_orders`` gives each bone's Euler order.
+    Returns the number of channel groups converted.
+    """
     groups, bags = _group_bone_fcurves(action)
     names = bone_names if bone_names is not None else {bone for (_k, bone, _p) in groups}
     kmap = _as_map(K, names)
@@ -313,14 +317,13 @@ def conjugate_bone_fcurves(action, K, report=None, bone_names=None):
             vec = {i - 1: fc for i, fc in channels.items() if i >= 1}
             _permute_vector_channels(vec, perm, sign, scale_values=True)
         elif prop == "rotation_euler":
-            _euler_to_conjugated_quaternion(bags[slot_key], bone, channels, k, report)
+            order = (rotation_orders or {}).get(bone, "XYZ")
+            _euler_to_conjugated_quaternion(bags[slot_key], bone, channels, k, report, order)
         converted += 1
     return converted
 
 
-def _euler_to_conjugated_quaternion(slot_bag, bone, channels, K, report):
-    from mathutils import Euler
-
+def _euler_to_conjugated_quaternion(slot_bag, bone, channels, K, report, order="XYZ"):
     slot, bag = slot_bag
     frames = sorted({float(k.co.x) for fc in channels.values() for k in fc.keyframe_points})
     if not frames:
@@ -330,7 +333,7 @@ def _euler_to_conjugated_quaternion(slot_bag, bone, channels, K, report):
     quats = []
     for f in frames:
         e = [channels[i].evaluate(f) if i in channels else 0.0 for i in range(3)]
-        quats.append(Kqi @ Euler(e, "XYZ").to_quaternion() @ Kq)
+        quats.append(Kqi @ Euler(e, order).to_quaternion() @ Kq)
     for fc in list(channels.values()):
         bag.fcurves.remove(fc)
     for comp in range(4):

@@ -119,6 +119,8 @@ class MORENN_PG_scene(bpy.types.PropertyGroup):
     log: CollectionProperty(type=MORENN_PG_logentry)
     log_index: IntProperty(default=0)
     last_manifest: StringProperty(subtype="FILE_PATH")
+    last_export_mode: StringProperty(default="AUTO")
+    last_export_scope: StringProperty(default="SELECTED")
 
 
 class MORENN_PG_uenode(bpy.types.PropertyGroup):

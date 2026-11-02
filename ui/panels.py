@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import os
+
 import bpy
 
 from .. import compat
-from ..core import units
+from ..core import classify, units
 from ..prefs import get_prefs
 
 
@@ -80,7 +82,8 @@ class MORENN_PT_object(MorennPanel, bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return context.active_object is not None and context.active_object.type in {"MESH", "EMPTY"}
+        obj = context.active_object
+        return obj is not None and (obj.type == "EMPTY" or classify.is_geometry_source(obj))
 
     def draw(self, context):
         layout = self.layout
@@ -132,7 +135,7 @@ class MORENN_PT_armature(MorennPanel, bpy.types.Panel):
             icon="CHECKMARK" if len(roots) == 1 else "ERROR",
         )
         if m.source_file:
-            col.label(text=f"From: {m.source_file.rsplit('/', 1)[-1]}", icon="IMPORT")
+            col.label(text=f"From: {os.path.basename(m.source_file)}", icon="IMPORT")
         layout.operator("morenn.convert_bone_axes", icon="ORIENTATION_GIMBAL")
         bone = context.active_bone
         if bone is not None and hasattr(bone, "morenn"):
@@ -167,6 +170,9 @@ class MORENN_PT_preflight(MorennPanel, bpy.types.Panel):
         row = layout.row(align=True)
         row.operator("morenn.fix_all", icon="MODIFIER")
         row.operator("morenn.select_offenders", icon="RESTRICT_SELECT_OFF")
+        if any(issue.severity == "ERROR" for issue in s.issues):
+            op = layout.operator("morenn.export_ue", text="Export Anyway", icon="ERROR")
+            op.mode, op.scope, op.force = s.last_export_mode, s.last_export_scope, True
 
 
 class MORENN_PT_unreal(MorennPanel, bpy.types.Panel):

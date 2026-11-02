@@ -8,7 +8,21 @@ from mathutils import Matrix
 
 from .. import compat
 from . import classify, naming, units
-from .classify import KIND_SKELETAL, KIND_STATIC
+from .classify import KIND_ANIMATION, KIND_SKELETAL, KIND_STATIC
+
+_TRANSFORM_PATHS = frozenset(
+    {
+        "location",
+        "rotation_euler",
+        "rotation_quaternion",
+        "rotation_axis_angle",
+        "scale",
+        "delta_location",
+        "delta_rotation_euler",
+        "delta_rotation_quaternion",
+        "delta_scale",
+    }
+)
 
 
 @dataclass
@@ -44,10 +58,8 @@ def _issue(issues, code, severity, message, obj=None, bone="", fix_id=""):
 # ---------------------------------------------------------------------- checks
 
 
-def _check_mesh_object(issues, obj, kind, prefs, exported_bones=None):
-    me = obj.data
-    det = obj.matrix_world.determinant()
-    if det < 0:
+def _check_transform(issues, obj, kind):
+    if obj.matrix_world.determinant() < 0:
         _issue(
             issues,
             "E003",
@@ -66,9 +78,30 @@ def _check_mesh_object(issues, obj, kind, prefs, exported_bones=None):
                 f"'{obj.name}' has non-uniform scale {tuple(round(v, 3) for v in s)}; baked into the mesh",
                 obj,
             )
-    if len(me.polygons) == 0:
+
+
+def _check_collection_instance(issues, obj):
+    others = sorted({o.type for o in obj.instance_collection.all_objects} - {"MESH", "EMPTY"})
+    if others:
+        _issue(
+            issues,
+            "W025",
+            "WARNING",
+            f"'{obj.name}': collection instances only export meshes; ignored: {', '.join(others)}",
+            obj,
+        )
+
+
+def _check_mesh_object(issues, obj, kind, prefs, depsgraph, exported_bones=None):
+    _check_transform(issues, obj, kind)
+    if obj.type != "MESH":  # converted at export
+        return
+    me = obj.data
+    evaluated = obj.evaluated_get(depsgraph)
+    result = evaluated.data if evaluated.is_evaluated else me
+    if len(result.polygons) == 0 and not compat.has_instances(evaluated):
         _issue(issues, "E019", "ERROR", f"'{obj.name}' has no faces", obj)
-    if not me.uv_layers:
+    if not result.uv_layers:
         _issue(
             issues,
             "W005",
@@ -76,8 +109,6 @@ def _check_mesh_object(issues, obj, kind, prefs, exported_bones=None):
             f"'{obj.name}' has no UV map (no tangents, lightmap UVs must be generated in UE)",
             obj,
         )
-    if len(me.uv_layers) > 8:
-        _issue(issues, "W018", "WARNING", f"'{obj.name}' has {len(me.uv_layers)} UV maps; Unreal keeps 8", obj)
     if len(me.color_attributes) > 1:
         _issue(
             issues,
@@ -88,9 +119,19 @@ def _check_mesh_object(issues, obj, kind, prefs, exported_bones=None):
         )
     if any(len(p.vertices) > 4 for p in me.polygons):
         _issue(issues, "I006", "INFO", f"'{obj.name}' has n-gons; triangulated at export", obj)
-    if not me.materials or any(m is None for m in me.materials):
+    materials = [slot.material for slot in obj.material_slots] or list(result.materials)
+    if not materials or any(m is None for m in materials):
         _issue(
             issues, "W007", "WARNING", f"'{obj.name}' has an empty material slot", obj, fix_id="assign_default_material"
+        )
+    deformers = [m for m in obj.modifiers if m.type == "ARMATURE" and m.object is not None]
+    if len({m.object for m in deformers}) > 1:
+        _issue(
+            issues,
+            "W015",
+            "WARNING",
+            f"'{obj.name}' has several Armature modifiers; only '{deformers[0].object.name}' is exported",
+            obj,
         )
     if me.shape_keys is not None and len(me.shape_keys.key_blocks) > 1:
         topo_mods = [
@@ -148,7 +189,27 @@ def _check_mesh_object(issues, obj, kind, prefs, exported_bones=None):
             )
 
 
-def _check_armature(issues, arm, prefs):
+def object_motion_source(arm):
+    """Name of ``arm`` or the ancestor that moves as an object, or None. Unreal only reads bone tracks."""
+    obj = arm
+    while obj is not None:
+        if _animated_transform(obj) or any(not c.mute for c in obj.constraints):
+            return obj.name
+        obj = obj.parent
+    return None
+
+
+def _animated_transform(obj):
+    for action, slot in compat.assigned_actions(obj, include_muted=False):
+        if slot is None:
+            continue
+        if any(fc.data_path in _TRANSFORM_PATHS for _slot, fc in compat.iter_fcurves(action, slot)):
+            return True
+    ad = obj.animation_data
+    return ad is not None and any(d.data_path in _TRANSFORM_PATHS for d in ad.drivers)
+
+
+def _check_armature(issues, arm, prefs, for_animation=False):
     from .export_fbx import bone_closure, export_bone_names
 
     exported = bone_closure(arm, export_bone_names(arm))
@@ -164,22 +225,23 @@ def _check_armature(issues, arm, prefs):
         )
     elif not roots:
         _issue(issues, "E001", "ERROR", f"'{arm.name}' has no exportable bones", arm)
-    ad = arm.animation_data
-    if ad is not None and (ad.action is not None or any(t.strips for t in ad.nla_tracks)):
-        animated = False
-        if ad.action is not None:
-            for _slot, fc in compat.iter_fcurves(ad.action):
-                if not fc.data_path.startswith("pose.bones"):
-                    animated = True
-                    break
-        if animated or any(t.strips for t in ad.nla_tracks):
-            _issue(
-                issues,
-                "E002",
-                "ERROR",
-                f"'{arm.name}' object itself is animated; Unreal ignores it (put root motion on the root bone)",
-                arm,
-            )
+    mover = object_motion_source(arm)
+    if mover is not None and for_animation:
+        _issue(
+            issues,
+            "E002",
+            "ERROR",
+            f"'{mover}' moves as an object and that motion would be lost; put root motion on the root bone",
+            arm,
+        )
+    elif mover is not None:
+        _issue(
+            issues,
+            "W002",
+            "WARNING",
+            f"'{mover}' moves as an object; Unreal will not see that motion in animations",
+            arm,
+        )
     s = arm.matrix_world.to_scale()
     if max(s) - min(s) > 1e-4:
         _issue(
@@ -216,6 +278,7 @@ def run(context, groups, prefs):
     """Return the list of Issues for ``groups`` (plus scene-level checks)."""
     issues = []
     scene = context.scene
+    depsgraph = context.evaluated_depsgraph_get()
     if not units.is_cm_scene(scene):
         _issue(
             issues,
@@ -224,20 +287,26 @@ def run(context, groups, prefs):
             f"Scene unit scale is {units.unit_factor(scene):g} cm per unit; export normalises to centimetres",
             fix_id="scene_setup",
         )
-    dupes = naming.unique([g.asset_name for g in groups])
-    if dupes:
-        _issue(issues, "E008", "ERROR", f"Duplicate asset names: {', '.join(dupes)}")
+    for name in naming.unique([g.asset_name for g in groups]):
+        sources = [g.source_object.name for g in groups if g.asset_name == name]
+        _issue(
+            issues,
+            "E008",
+            "ERROR",
+            f"Several objects export as {name} ({', '.join(sources)}); set an export name on one of them",
+        )
+    checked_armatures = set()
     for g in groups:
-        base_from_name = naming.sanitize_asset_name(naming.strip_numeric_suffix(g.source_object.name))
-        if (
-            g.source_object is not None
-            and g.source_object.name != base_from_name
-            and not g.source_object.morenn.export_name
-        ):
-            src = g.source_object
-            if not naming.is_ue_safe(src.name) or ".0" in src.name:
-                _issue(issues, "I011", "INFO", f"'{src.name}' exports as '{g.asset_name}'", src)
-        if g.kind == KIND_SKELETAL:
+        src = g.source_object
+        if not src.morenn.export_name and (not naming.is_ue_safe(src.name) or ".0" in src.name):
+            _issue(issues, "I011", "INFO", f"'{src.name}' exports as '{g.asset_name}'", src)
+        if g.kind == KIND_ANIMATION:
+            if g.armature.name not in checked_armatures:
+                checked_armatures.add(g.armature.name)
+                _check_armature(issues, g.armature, prefs, for_animation=True)
+            if g.frame_range is None or g.frame_range[1] < g.frame_range[0]:
+                _issue(issues, "E022", "ERROR", f"'{g.asset_name}' has an empty frame range", g.armature)
+        elif g.kind == KIND_SKELETAL:
             exported = _check_armature(issues, g.armature, prefs)
             if not g.render:
                 _issue(
@@ -248,15 +317,16 @@ def run(context, groups, prefs):
                     g.armature,
                 )
             for obj in g.render:
-                _check_mesh_object(issues, obj, KIND_SKELETAL, prefs, exported)
+                _check_mesh_object(issues, obj, KIND_SKELETAL, prefs, depsgraph, exported)
         else:
             for obj in g.render:
-                _check_mesh_object(issues, obj, KIND_STATIC, prefs)
-            for objs in g.lods.values():
-                for obj in objs:
-                    if obj.matrix_world.determinant() < 0:
-                        _issue(issues, "E003", "ERROR", f"'{obj.name}' has a mirrored scale", obj, fix_id="apply_scale")
-            for obj, _kind in g.collisions:
+                if classify.is_collection_instance(obj):
+                    _check_transform(issues, obj, KIND_STATIC)
+                    _check_collection_instance(issues, obj)
+                else:
+                    _check_mesh_object(issues, obj, KIND_STATIC, prefs, depsgraph)
+            satellites = [o for objs in g.lods.values() for o in objs] + [o for o, _kind in g.collisions]
+            for obj in satellites:
                 if obj.matrix_world.determinant() < 0:
                     _issue(issues, "E003", "ERROR", f"'{obj.name}' has a mirrored scale", obj, fix_id="apply_scale")
     return issues
@@ -284,6 +354,20 @@ def store(scene, issues):
 # ---------------------------------------------------------------------- fixers
 
 
+def apply_fix(context, issue):
+    """Run the fixer of ``issue``. Returns ``(changed, message)`` and never raises for a failed fix."""
+    entry = FIXERS.get(issue.fix_id)
+    if entry is None:
+        return False, "No automatic fix for this issue"
+    label, fix = entry
+    try:
+        changed = fix(context, issue)
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as exc:
+        reason = (str(exc).strip().splitlines() or [type(exc).__name__])[-1]
+        return False, f"{label} failed on '{issue.object_name}': {reason}"
+    return changed, f"{label}: {'done' if changed else 'nothing changed'}"
+
+
 def _object(name):
     return bpy.data.objects.get(name)
 
@@ -300,7 +384,9 @@ def fix_apply_scale(context, issue):
         selected_editable_objects=[obj],
         **compat.window_override(),
     ):
-        return "FINISHED" in bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        return "FINISHED" in bpy.ops.object.transform_apply(
+            location=False, rotation=False, scale=True, isolate_users=True
+        )
 
 
 @fixer("assign_default_material", "Assign M_Default")

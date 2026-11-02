@@ -1,0 +1,59 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: A small .blend or FBX file helps a lot. Do not attach assets you may not share.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Press Copy in the Log panel and paste here. Add the system console output for unexpected errors.
+      render: text
+  - type: input
+    id: morennbridge
+    attributes:
+      label: MorennBridge version
+    validations:
+      required: true
+  - type: input
+    id: blender
+    attributes:
+      label: Blender version
+    validations:
+      required: true
+  - type: input
+    id: unreal
+    attributes:
+      label: Unreal Engine version
+      description: Leave empty if Unreal is not involved.
+  - type: dropdown
+    id: importer
+    attributes:
+      label: Unreal importer
+      options:
+        - Not relevant
+        - Interchange
+        - Legacy
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true

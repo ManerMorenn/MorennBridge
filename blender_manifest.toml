@@ -5,9 +5,10 @@ version = "0.1.0"
 name = "MorennBridge"
 tagline = "Fast and correct FBX bridge between Blender and Unreal Engine"
 maintainer = "Tristan Allaire <tristan.allaire@manermorenn.com>"
+website = "https://morennbridge.manermorenn.com"
 type = "add-on"
 tags = ["Import-Export", "Pipeline"]
-blender_version_min = "4.2.0"
+blender_version_min = "4.5.0"
 license = [
   "SPDX:GPL-3.0-or-later",
 ]
@@ -29,6 +30,11 @@ paths_exclude_pattern = [
   "/site/",
   "/*.zip",
   "/tests/",
+  "/.coverage",
+  "/CODE_OF_CONDUCT.md",
+  "/CONTRIBUTING.md",
+  "/SECURITY.md",
+  "/docs/listing/",
   "/dev/",
   "/docs/images/",
   "/pyproject.toml",

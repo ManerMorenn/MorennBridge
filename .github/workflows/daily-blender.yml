@@ -1,0 +1,28 @@
+name: Blender daily builds
+
+on:
+  schedule:
+    - cron: "30 5 * * 1,4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (Blender ${{ matrix.branch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [v52, v53, main]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: setup
+        uses: ./.github/actions/setup-blender
+        with:
+          version: daily:${{ matrix.branch }}
+      - name: Run the test suite
+        run: |
+          "${{ steps.setup.outputs.executable }}" --version
+          "${{ steps.setup.outputs.executable }}" -b --factory-startup --python tests/run_tests.py

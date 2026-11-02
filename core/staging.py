@@ -7,13 +7,16 @@ every created datablock is removed, even when an exception is raised.
 
 import uuid
 
+import bmesh
 import bpy
 import numpy as np
 from mathutils import Matrix
 
-from . import units
+from .. import compat
+from . import classify, units
 
 TEMP_PREFIX = "MB__"
+TRIANGULATED_BY_MODIFIER = frozenset({"MESH", "CURVE", "SURFACE", "FONT"})
 
 
 class StagingError(RuntimeError):
@@ -39,6 +42,7 @@ class Staging:
         self.journal = []  # callables undoing temporary changes to user data
         self.name_map = {}  # temp name -> final FBX node name
         self._counter = 0
+        self._realize_group = None
         self._src_frame = self.src_scene.frame_current
 
     # ------------------------------------------------------------------ lifecycle
@@ -102,8 +106,6 @@ class Staging:
     def override(self):
         """Keywords for ``bpy.context.temp_override`` so operators act on the temp scene."""
         kw = {"scene": self.temp_scene, "view_layer": self.temp_scene.view_layers[0]}
-        from .. import compat
-
         kw.update(compat.window_override())
         return kw
 
@@ -133,45 +135,116 @@ class Staging:
         return self.context.evaluated_depsgraph_get()
 
     # ------------------------------------------------------------------ meshes
+    def _new_geometry_group(self, label):
+        group = bpy.data.node_groups.new(f"{TEMP_PREFIX}{label}", "GeometryNodeTree")
+        self.datablocks.append(group)
+        group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        output = group.nodes.new("NodeGroupOutput")
+        realize = group.nodes.new("GeometryNodeRealizeInstances")
+        group.links.new(realize.outputs[0], output.inputs[0])
+        return group, realize
+
+    def _realize_instances_group(self):
+        if self._realize_group is None:
+            group, realize = self._new_geometry_group("REALIZE")
+            group.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+            source = group.nodes.new("NodeGroupInput")
+            group.links.new(source.outputs[0], realize.inputs[0])
+            self._realize_group = group
+        return self._realize_group
+
+    def _collection_group(self, collection):
+        group, realize = self._new_geometry_group("COLLECTION")
+        info = group.nodes.new("GeometryNodeCollectionInfo")
+        info.inputs["Collection"].default_value = collection
+        group.links.new(info.outputs[0], realize.inputs[0])
+        return group
+
+    @staticmethod
+    def _add_triangulate(obj):
+        tri = obj.modifiers.new("MB_TRIANGULATE", "TRIANGULATE")
+        tri.quad_method = "BEAUTY"
+        tri.ngon_method = "BEAUTY"
+        tri.min_vertices = 4
+        if hasattr(tri, "keep_custom_normals"):
+            tri.keep_custom_normals = True
+        return tri
+
+    def _evaluate_collection_instance(self, src, triangulate):
+        """All meshes of the instanced collection joined into one, relative to the instancer."""
+        host_mesh = bpy.data.meshes.new(self.temp_name())
+        self.datablocks.append(host_mesh)
+        host = bpy.data.objects.new(host_mesh.name, host_mesh)
+        self.coll.objects.link(host)
+        try:
+            host.modifiers.new("MB_COLLECTION", "NODES").node_group = self._collection_group(src.instance_collection)
+            if triangulate:
+                self._add_triangulate(host)
+            dg = self.depsgraph()
+            me = bpy.data.meshes.new_from_object(host.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg)
+        finally:
+            bpy.data.objects.remove(host, do_unlink=True)
+        self.datablocks.append(me)
+        return me
+
+    def _evaluation_copy(self, src):
+        """A visible copy of ``src`` for objects the view layer does not evaluate (monitor-hidden, excluded)."""
+        copy = src.copy()
+        copy.hide_viewport = False
+        self.coll.objects.link(copy)
+        return copy
+
     def evaluate_source_mesh(self, src, triangulate=True, keep_shape_keys=True):
         """Evaluated copy of ``src``'s mesh (modifiers applied, armature deformation excluded).
 
         Returns ``(mesh, shape_specs)``; shape keys are returned as specs because they can only be
         attached once the mesh belongs to an object.
         """
-        if src.type != "MESH":
-            raise StagingError(f"'{src.name}' is not a mesh")
+        if classify.is_collection_instance(src):
+            return self._evaluate_collection_instance(src, triangulate), []
+        if not classify.is_geometry_source(src):
+            raise StagingError(f"'{src.name}' has no geometry")
+        target = src
+        dg = self.source_depsgraph()
+        evaluation_copy = None
+        if not src.evaluated_get(dg).is_evaluated:
+            target = evaluation_copy = self._evaluation_copy(src)
+            dg = self.depsgraph()
+        added = []
         hidden = []
-        for mod in src.modifiers:
+        for mod in target.modifiers:
             if mod.type == "ARMATURE" and (mod.show_viewport or mod.show_render):
                 hidden.append((mod, mod.show_viewport, mod.show_render))
-                mod.show_viewport = False
-                mod.show_render = False
-        tri = None
-        if triangulate:
-            tri = src.modifiers.new("MB_TRIANGULATE", "TRIANGULATE")
-            tri.quad_method = "BEAUTY"
-            tri.ngon_method = "BEAUTY"
-            tri.min_vertices = 4
-            if hasattr(tri, "keep_custom_normals"):
-                tri.keep_custom_normals = True
-        keys = src.data.shape_keys
+        keys = target.data.shape_keys if target.type == "MESH" else None
         saved_keys = None
         if keys is not None and len(keys.key_blocks) > 1 and keep_shape_keys:
-            saved_keys = (src.show_only_shape_key, src.active_shape_key_index)
+            saved_keys = (target.show_only_shape_key, target.active_shape_key_index)
         try:
-            dg = self.source_depsgraph()
+            for mod, _viewport, _render in hidden:
+                mod.show_viewport = False
+                mod.show_render = False
+            dg.update()
+            if compat.has_instances(target.evaluated_get(dg)):
+                realize = target.modifiers.new("MB_REALIZE", "NODES")
+                realize.node_group = self._realize_instances_group()
+                added.append(realize)
+            if triangulate and target.type in TRIANGULATED_BY_MODIFIER:
+                added.append(self._add_triangulate(target))
             if saved_keys is None:
                 dg.update()
-                me = bpy.data.meshes.new_from_object(src.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg)
+                me = bpy.data.meshes.new_from_object(
+                    target.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg
+                )
                 self.datablocks.append(me)
                 return me, []
-            src.show_only_shape_key = True
+            target.show_only_shape_key = True
             evaluated = []
             for i, _kb in enumerate(keys.key_blocks):
-                src.active_shape_key_index = i
+                target.active_shape_key_index = i
                 dg.update()
-                m = bpy.data.meshes.new_from_object(src.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg)
+                m = bpy.data.meshes.new_from_object(
+                    target.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg
+                )
                 evaluated.append(m)
             base = evaluated[0]
             self.datablocks.append(base)
@@ -201,13 +274,15 @@ class Staging:
                 bpy.data.meshes.remove(m)
             return base, specs
         finally:
-            if tri is not None:
-                src.modifiers.remove(tri)
-            for mod, sv, sr in hidden:
-                mod.show_viewport = sv
-                mod.show_render = sr
+            for mod in added:
+                target.modifiers.remove(mod)
+            for mod, viewport, render in hidden:
+                mod.show_viewport = viewport
+                mod.show_render = render
             if saved_keys is not None:
-                src.show_only_shape_key, src.active_shape_key_index = saved_keys
+                target.show_only_shape_key, target.active_shape_key_index = saved_keys
+            if evaluation_copy is not None:
+                bpy.data.objects.remove(evaluation_copy, do_unlink=True)
 
     @staticmethod
     def _apply_shape_specs(obj, specs):
@@ -242,6 +317,10 @@ class Staging:
     ):
         """Copy ``src``'s evaluated mesh into the temp scene, baked by ``matrix`` (object at identity)."""
         me, shape_specs = self.evaluate_source_mesh(src, triangulate=triangulate, keep_shape_keys=keep_shape_keys)
+        if len(me.polygons) == 0:
+            raise StagingError(f"'{src.name}' evaluates to an empty mesh (E019)")
+        if triangulate and src.type == "META":
+            _triangulate_mesh(me)
         if strip_attributes:
             while me.uv_layers:
                 me.uv_layers.remove(me.uv_layers[0])
@@ -249,6 +328,8 @@ class Staging:
                 me.color_attributes.remove(me.color_attributes[0])
         if not keep_materials:
             me.materials.clear()
+        else:
+            _apply_object_linked_materials(me, src)
         obj = self._new_object(me, final_name, role)
         for vg in src.vertex_groups:
             obj.vertex_groups.new(name=vg.name)
@@ -371,7 +452,24 @@ class Staging:
             vl.update()
 
 
+def _triangulate_mesh(me):
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bmesh.ops.triangulate(bm, faces=bm.faces, quad_method="BEAUTY", ngon_method="BEAUTY")
+    bm.to_mesh(me)
+    bm.free()
+
+
+def _apply_object_linked_materials(me, src):
+    """``new_from_object`` only keeps data-level materials; object-linked slots live on the object."""
+    for index, slot in enumerate(src.material_slots):
+        if slot.link == "OBJECT" and index < len(me.materials):
+            me.materials[index] = slot.material
+
+
 def _collection_for(block):
+    if isinstance(block, bpy.types.NodeTree):
+        return bpy.data.node_groups
     if isinstance(block, bpy.types.Mesh):
         return bpy.data.meshes
     if isinstance(block, bpy.types.Armature):
@@ -381,12 +479,6 @@ def _collection_for(block):
     if isinstance(block, bpy.types.Curve):
         return bpy.data.curves
     return None
-
-
-def world_without_translation(matrix):
-    m = matrix.copy()
-    m.translation = (0.0, 0.0, 0.0)
-    return m
 
 
 def translation_removed(anchor_world):

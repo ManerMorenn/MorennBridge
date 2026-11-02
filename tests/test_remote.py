@@ -2,13 +2,19 @@
 """Protocol test for the remote-execution client against a fake Unreal node (same JSON protocol)."""
 
 import json
+import os
 import socket
 import struct
 import threading
 import time
+import types
 import unittest
+from unittest import mock
+
+import bpy
 
 from tests import fixtures
+from tests.test_export_skeletal import _rigged_character
 
 GROUP, PORT = "239.0.0.1", 6799  # a test port so a real editor is never disturbed
 
@@ -21,6 +27,8 @@ class FakeUnrealNode(threading.Thread):
         self.node_id = "fake-ue-node"
         self.stop = threading.Event()
         self.commands = []
+        self.success = True
+        self.output = [{"type": "Info", "output": "hello from fake UE"}]
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if hasattr(socket, "SO_REUSEPORT"):
@@ -95,10 +103,10 @@ class FakeUnrealNode(threading.Thread):
         data = msg["data"]
         self.commands.append(data)
         result = {
-            "success": True,
+            "success": self.success,
             "command": data["command"],
             "result": "42" if data["exec_mode"] == "EvaluateStatement" else "",
-            "output": [{"type": "Info", "output": "hello from fake UE"}],
+            "output": self.output,
         }
         reply = {
             "version": 1,
@@ -177,6 +185,179 @@ class RemoteProtocolTests(unittest.TestCase):
             self.assertEqual(res.result, "42")
         time.sleep(0.3)
         self.assertIsNone(self.fake.tcp)
+
+    def test_commands_need_a_connection(self):
+        session = self.remote.RemoteSession(GROUP, PORT, "0.0.0.0", "127.0.0.1")
+        with self.assertRaises(self.remote.RemoteError):
+            session.run("print(1)")
+
+
+class UnrealOperatorTests(unittest.TestCase):
+    def setUp(self):
+        self.scene = fixtures.fresh_scene(cm=True)
+        self.tmp = fixtures.temp_dir()
+        self.scene.morenn.export_dir = self.tmp
+        self.ue_ops = fixtures.addon_module("ops.ue_ops")
+        self.rt = bpy.context.window_manager.morenn_rt
+        self.rt.ue_nodes.clear()
+        self.prefs = fixtures.addon_module("prefs").get_prefs()
+        self.original_port = self.prefs.multicast_port
+        patcher = mock.patch.object(self.ue_ops.compat, "online_access_allowed", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        self.prefs.multicast_port = self.original_port
+        self.rt.ue_nodes.clear()
+        fake = getattr(self, "fake", None)
+        if fake is not None:
+            fake.stop.set()
+            fake.join(timeout=2.0)
+            fake.udp.close()
+
+    def start_fake_editor(self):
+        if not loopback_multicast_available():
+            self.skipTest("loopback multicast is not available on this machine")
+        self.fake = FakeUnrealNode()
+        self.fake.start()
+        time.sleep(0.2)
+        self.prefs.multicast_port = PORT
+        node = self.rt.ue_nodes.add()
+        node.node_id, node.project, node.engine, node.machine = "fake-ue-node", "FakeProject", "5.8.4", "localhost"
+        self.rt.ue_selected = 0
+
+    def export_cube(self):
+        fixtures.select_only(fixtures.make_cube("Crate"))
+        bpy.ops.morenn.export_ue()
+        return self.scene.morenn.last_manifest
+
+    def test_push_applies_the_editor_report(self):
+        self.start_fake_editor()
+        rig, _body = _rigged_character("Hero")
+        fixtures.select_only(rig)
+        bpy.ops.morenn.export_ue()
+        manifest = self.scene.morenn.last_manifest
+        result = {
+            "items": [
+                {
+                    "file": "SKM_Hero.fbx",
+                    "success": True,
+                    "imported": ["/Game/SKM_Hero"],
+                    "skeleton": "/Game/SKEL_Hero",
+                    "source_armature": rig.name,
+                }
+            ]
+        }
+        with open(manifest + ".result.json", "w", encoding="utf-8") as fh:
+            json.dump(result, fh)
+        self.assertEqual(bpy.ops.morenn.ue_push(), {"FINISHED"})
+        self.assertEqual(rig.data.morenn.ue_skeleton_path, "/Game/SKEL_Hero")
+        self.assertEqual(self.fake.commands[-1]["exec_mode"], "ExecuteFile")
+        self.assertIn("mb_ue_import.py", self.fake.commands[-1]["command"])
+        self.assertIn(manifest, self.fake.commands[-1]["command"])
+        self.assertEqual(self.rt.ue_status, "Done")
+
+    def test_push_after_export_runs_the_push(self):
+        self.start_fake_editor()
+        cube = fixtures.make_cube("Crate")
+        fixtures.select_only(cube)
+        self.scene.morenn.push_after_export = True
+        fixtures.call(bpy.ops.morenn.export_ue)
+        self.assertEqual(len(self.fake.commands), 1)
+
+    def test_push_reports_editor_errors(self):
+        self.start_fake_editor()
+        manifest = self.export_cube()
+        self.fake.success = False
+        self.fake.output = [{"type": "Error", "output": "import exploded"}, {"type": "Warning", "output": "careful"}]
+        self.assertEqual(fixtures.call(bpy.ops.morenn.ue_push), {"CANCELLED"})
+        text = fixtures.log_text()
+        self.assertIn("UE: import exploded", text)
+        self.assertIn("UE: careful", text)
+        self.assertIn("Unreal did not write a result file", text)
+        self.assertFalse(os.path.exists(manifest + ".result.json"))
+
+    def test_push_reports_failed_items(self):
+        self.start_fake_editor()
+        manifest = self.export_cube()
+        with open(manifest + ".result.json", "w", encoding="utf-8") as fh:
+            json.dump({"items": [{"file": "SM_Crate.fbx", "success": False, "errors": ["no permission"]}]}, fh)
+        self.assertEqual(fixtures.call(bpy.ops.morenn.ue_push), {"CANCELLED"})
+        self.assertIn("UE failed on SM_Crate.fbx: no permission", fixtures.log_text())
+        self.assertEqual(self.rt.ue_status, "Failed")
+
+    def test_push_without_a_connection_back(self):
+        self.start_fake_editor()
+        self.export_cube()
+        remote = fixtures.addon_module("ue.remote")
+        with mock.patch.object(remote.RemoteSession, "connect", side_effect=remote.RemoteError("no answer")):
+            self.assertEqual(fixtures.call(bpy.ops.morenn.ue_push), {"CANCELLED"})
+        self.assertIn("no answer", fixtures.log_text())
+
+    def test_push_needs_a_manifest_and_an_editor(self):
+        self.assertFalse(bpy.ops.morenn.ue_push.poll())
+
+    def test_pull_imports_what_the_editor_exported(self):
+        self.start_fake_editor()
+        done, _manifest, report = fixtures.run_export([fixtures.make_cube("Crate")], self.tmp)
+        self.assertTrue(report.ok)
+        fixtures.fresh_scene(cm=True)
+        self.scene.morenn.export_dir = self.tmp
+        out = os.path.join(self.tmp, "from_unreal")
+        os.makedirs(out)
+        items = [
+            {"file": done[0].path, "success": True},
+            {"asset_path": "/Game/Broken", "success": False, "errors": ["cannot export"]},
+        ]
+        with open(os.path.join(out, "pull.result.json"), "w", encoding="utf-8") as fh:
+            json.dump({"items": items}, fh)
+        fixtures.call(bpy.ops.morenn.ue_pull)
+        self.assertIn("SM_Crate", bpy.data.objects)
+        self.assertIn("UE could not export /Game/Broken: cannot export", fixtures.log_text())
+        self.assertIn("mb_ue_export.py", self.fake.commands[-1]["command"])
+
+    def test_pull_without_a_result_file(self):
+        self.start_fake_editor()
+        self.assertEqual(fixtures.call(bpy.ops.morenn.ue_pull), {"CANCELLED"})
+        self.assertIn("Unreal did not write a result file", fixtures.log_text())
+
+    def test_offline_blender_refuses(self):
+        with mock.patch.object(self.ue_ops.compat, "online_access_allowed", return_value=False):
+            self.assertEqual(fixtures.call(bpy.ops.morenn.ue_discover), {"CANCELLED"})
+
+    def test_discovery_modal_fills_the_node_list(self):
+        remote = fixtures.addon_module("ue.remote")
+        session = mock.Mock()
+        session.poll_pongs.return_value = [remote.UENode("id", "me", "box", "5.8.4", "", "", "Game")]
+        state = types.SimpleNamespace(
+            _timer=None, _session=session, _found={}, _deadline=0.0, _next_ping=0.0, report=mock.Mock()
+        )
+        state._finish = lambda context, error=None: self.ue_ops.MORENN_OT_ue_discover._finish(state, context, error)
+        event = types.SimpleNamespace(type="TIMER")
+        result = self.ue_ops.MORENN_OT_ue_discover.modal(state, bpy.context, event)
+        self.assertEqual(result, {"FINISHED"})
+        self.assertEqual([n.project for n in self.rt.ue_nodes], ["Game"])
+        self.assertEqual(self.rt.ue_status, "1 editor(s) found")
+        session.close.assert_called_once()
+
+    def test_discovery_without_an_editor(self):
+        state = types.SimpleNamespace(_timer=None, _session=None, _found={}, report=mock.Mock())
+        self.ue_ops.MORENN_OT_ue_discover._finish(state, bpy.context)
+        self.assertIn("No Unreal Editor found", self.rt.ue_status)
+        state.report.assert_called_once()
+
+    def test_discovery_error(self):
+        state = types.SimpleNamespace(_timer=None, _session=None, _found={}, report=mock.Mock())
+        self.ue_ops.MORENN_OT_ue_discover._finish(state, bpy.context, "Ping failed")
+        self.assertEqual(self.rt.ue_status, "Ping failed")
+
+    def test_discovery_ignores_other_events(self):
+        event = types.SimpleNamespace(type="MOUSEMOVE")
+        self.assertEqual(self.ue_ops.MORENN_OT_ue_discover.modal(None, bpy.context, event), {"PASS_THROUGH"})
+
+    def test_setup_help_opens_the_guide(self):
+        self.assertEqual(bpy.ops.morenn.ue_setup_help(), {"FINISHED"})
+        self.assertIn("MorennBridge UE_SETUP.md", bpy.data.texts)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import bpy
 from mathutils import Matrix
 
 from .. import compat
+from ..fbxpatch import ascii as fbx_ascii
 from ..fbxpatch import inspect as I
 from ..fbxpatch import patches, tree
 from . import bones, naming, units
@@ -26,6 +27,7 @@ class ImportInfo:
     has_skin: bool = False
     mesh_nodes: list = field(default_factory=list)
     null_nodes: list = field(default_factory=list)
+    is_ascii: bool = False
 
     @property
     def from_blender(self):
@@ -44,7 +46,6 @@ class ImportResult:
     armatures: list = field(default_factory=list)
     meshes: list = field(default_factory=list)
     actions: list = field(default_factory=list)
-    in_scene_units: bool = False
 
 
 # ---------------------------------------------------------------------- pre-pass
@@ -77,15 +78,42 @@ def analyze(root):
     return info
 
 
+def _temporary_copy_path(filepath):
+    return os.path.join(bpy.app.tempdir or os.path.dirname(filepath), "morenn_" + os.path.basename(filepath))
+
+
+def _prepare_ascii_file(filepath, report):
+    with open(filepath, "rb") as fh:
+        data = fh.read()
+    if not fbx_ascii.looks_like_fbx(data):
+        raise tree.FbxFormatError(f"'{os.path.basename(filepath)}' is not an FBX file")
+    info = ImportInfo(
+        creator=fbx_ascii.creator(data),
+        unit_scale=fbx_ascii.unit_scale(data),
+        root_bones=fbx_ascii.root_bone_names(data),
+        anim_stacks=fbx_ascii.anim_stacks(data),
+        is_ascii=True,
+    )
+    report.warning(f"'{os.path.basename(filepath)}' is ASCII FBX: LOD groups and bone axis markers are not read")
+    if not info.root_bones:
+        return filepath, info
+    tmp = _temporary_copy_path(filepath)
+    with open(tmp, "wb") as fh:
+        fh.write(fbx_ascii.retype_root_bones(data))
+    report.info(f"Root bone(s) {', '.join(info.root_bones)} restored as bones (pre-pass)")
+    return tmp, info
+
+
 def prepare_file(filepath, report):
     """Analyze and, when needed, write a patched temporary copy. Returns ``(path_to_import, info)``."""
+    if not tree.is_binary(filepath):
+        return _prepare_ascii_file(filepath, report)
     root, version = tree.load(filepath)
     info = analyze(root)
     if not info.root_bones:
         return filepath, info
     res = patches.retype_root_bones(root)
-    tmp_dir = bpy.app.tempdir or os.path.dirname(filepath)
-    tmp = os.path.join(tmp_dir, "morenn_" + os.path.basename(filepath))
+    tmp = _temporary_copy_path(filepath)
     tree.save(tmp, root, version)
     report.info(f"Root bone(s) {', '.join(res.notes)} restored as bones (pre-pass)")
     return tmp, info
@@ -108,6 +136,8 @@ def _new_since(snapshot, name):
 def run_importer(context, filepath, prefs, report):
     kw = dict(
         filepath=filepath,
+        global_scale=100.0,
+        import_colors="SRGB",
         use_custom_normals=True,
         use_custom_props=True,
         validate_meshes=True,
@@ -115,32 +145,15 @@ def run_importer(context, filepath, prefs, report):
         use_anim=True,
         anim_offset=float(prefs.import_anim_offset),
     )
-    if compat.has_new_fbx_importer():
-        kw.update(global_scale=100.0, import_colors="SRGB")
-        kw = compat.filter_kwargs(bpy.ops.wm.fbx_import, kw, report)
-        with context.temp_override(**compat.window_override()):
-            result = bpy.ops.wm.fbx_import(**kw)
-        in_scene_units = False
-    else:  # legacy Python importer: already converts to scene units, raw joint axes
-        kw.update(
-            global_scale=1.0,
-            colors_type="SRGB",
-            automatic_bone_orientation=False,
-            primary_bone_axis="Y",
-            secondary_bone_axis="X",
-            use_manual_orientation=False,
-        )
-        kw = compat.filter_kwargs(bpy.ops.import_scene.fbx, kw, report)
-        with context.temp_override(**compat.window_override()):
-            result = bpy.ops.import_scene.fbx(**kw)
-        in_scene_units = True
+    kw = compat.filter_kwargs(bpy.ops.wm.fbx_import, kw, report)
+    with context.temp_override(**compat.window_override()):
+        result = bpy.ops.wm.fbx_import(**kw)
     if "FINISHED" not in result:
-        raise RuntimeError(f"FBX importer returned {result}")
-    return in_scene_units
+        raise RuntimeError(f"Blender's FBX importer returned {result}")
 
 
 def import_file(context, filepath, prefs, report, convert_axes=None, tidy=None, reset_pose=None):
-    """Import one FBX. Returns ImportResult. Post-processing follows §9 of the plan."""
+    """Import one FBX and post-process it. Returns ImportResult."""
     convert_axes = prefs.import_convert_bone_axes if convert_axes is None else convert_axes
     tidy = prefs.import_tidy_hierarchy if tidy is None else tidy
     reset_pose = prefs.import_reset_pose if reset_pose is None else reset_pose
@@ -148,14 +161,14 @@ def import_file(context, filepath, prefs, report, convert_axes=None, tidy=None, 
     path, info = prepare_file(filepath, report)
     before = _snapshot()
     try:
-        in_scene_units = run_importer(context, path, prefs, report)
+        run_importer(context, path, prefs, report)
     finally:
         if path != filepath:
             try:
                 os.remove(path)
             except OSError:
                 pass
-    result = ImportResult(filepath, info, in_scene_units=in_scene_units)
+    result = ImportResult(filepath, info)
     result.objects = _new_since(before, "objects")
     result.armatures = [o for o in result.objects if o.type == "ARMATURE"]
     result.meshes = [o for o in result.objects if o.type == "MESH"]
@@ -168,8 +181,7 @@ def import_file(context, filepath, prefs, report, convert_axes=None, tidy=None, 
     _rename_actions(result, stem, report)
     if tidy:
         _tidy(context, result, stem, report)
-    if not in_scene_units:
-        _rescale_to_scene_units(context, result, report)
+    _rescale_to_scene_units(context, result, report)
     return result
 
 
@@ -179,7 +191,6 @@ def import_file(context, filepath, prefs, report, convert_axes=None, tidy=None, 
 def _decide_axes(arm, info, prefs, report):
     if info.marker_axes and len(info.marker_axes) >= 2:
         axes = info.marker_axes
-        axes[:-1] if axes.startswith("-") and len(axes) == 3 and False else None
         # marker is "<P><S>" with optional '-' signs, e.g. "XY", "-XY", "X-Z"
         tokens = []
         i = 0
@@ -284,10 +295,15 @@ def _tidy(context, result, stem, report):
             continue
         lod_objs.sort(key=lambda t: t[0])
         lod0 = lod_objs[0][1]
-        for index, obj in lod_objs:
+        for _index, obj in lod_objs:
             world = obj.matrix_world.copy()
             obj.parent = None
             obj.matrix_world = world
+        if group is not None and group.type == "EMPTY":  # frees the name for LOD0
+            result.objects.remove(group)
+            by_name.pop(group_name, None)
+            bpy.data.objects.remove(group, do_unlink=True)
+        for index, obj in lod_objs:
             if index == 0:
                 obj.name = group_name
                 obj.data.name = group_name
@@ -295,10 +311,6 @@ def _tidy(context, result, stem, report):
                 obj.morenn.role = "LOD"
                 obj.morenn.lod_index = index
                 obj.morenn.lod_of = lod0
-        if group is not None and group.type == "EMPTY":
-            bpy.data.objects.remove(group, do_unlink=True)
-            result.objects.remove(group)
-            by_name.pop(group_name, None)
     # collision meshes exported by Unreal: UCX_<Name>[_LOD0]
     by_name = {o.name: o for o in result.objects}
     for obj in list(result.meshes):

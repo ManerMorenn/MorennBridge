@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Headless test runner.
 
-    /Applications/Blender.app/Contents/MacOS/Blender -b --python morennbridge/tests/run_tests.py -- [-k pattern] [-v]
+    blender -b --factory-startup --python tests/run_tests.py -- [-k pattern] [-v]
 
 The add-on is loaded as an extension through a symlink in the ``user_default`` repository when possible,
-otherwise it is imported directly from the source tree.
+otherwise it is imported directly from the source tree. Set ``MORENN_COVERAGE_LIB`` to a folder holding the
+``coverage`` package to measure coverage; the threshold comes from ``pyproject.toml``.
 """
 
-import importlib
+import importlib.util
 import os
 import pathlib
 import sys
@@ -16,7 +17,7 @@ import unittest
 import bpy
 
 ADDON_DIR = pathlib.Path(__file__).resolve().parent.parent
-ADDON_NAME = ADDON_DIR.name
+ADDON_NAME = "morennbridge"
 EXT_MODULE = f"bl_ext.user_default.{ADDON_NAME}"
 
 
@@ -50,11 +51,35 @@ def load_addon():
                 return module
     except Exception as exc:
         print(f"[tests] extension load failed ({exc!r}); importing from source tree")
-    sys.path.insert(0, str(ADDON_DIR.parent))
-    module = importlib.import_module(ADDON_NAME)
+    spec = importlib.util.spec_from_file_location(
+        ADDON_NAME, ADDON_DIR / "__init__.py", submodule_search_locations=[str(ADDON_DIR)]
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[ADDON_NAME] = module
+    spec.loader.exec_module(module)
     module.register()
     print(f"[tests] loaded from source as {ADDON_NAME}")
     return module
+
+
+def start_coverage():
+    library = os.environ.get("MORENN_COVERAGE_LIB")
+    if not library:
+        return None
+    sys.path.insert(0, library)
+    import coverage
+
+    measure = coverage.Coverage(config_file=str(ADDON_DIR / "pyproject.toml"), source=[str(ADDON_DIR)])
+    measure.start()
+    return measure
+
+
+def finish_coverage(measure):
+    """Print the report. Returns False when coverage is below the configured threshold."""
+    measure.stop()
+    measure.save()
+    total = measure.report()
+    return total >= measure.get_option("report:fail_under")
 
 
 def main():
@@ -70,6 +95,7 @@ def main():
             verbosity = 2
         i += 1
 
+    measure = start_coverage()
     addon = load_addon()
     os.environ["MORENN_ADDON_MODULE"] = addon.__name__
 
@@ -89,7 +115,10 @@ def main():
 
         suite = _filter(suite)
     result = unittest.TextTestRunner(verbosity=verbosity).run(suite)
-    sys.exit(0 if result.wasSuccessful() else 1)
+    passed = result.wasSuccessful()
+    if measure is not None:
+        passed = finish_coverage(measure) and passed
+    sys.exit(0 if passed else 1)
 
 
 if __name__ == "__main__":
