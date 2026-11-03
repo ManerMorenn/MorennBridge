@@ -161,6 +161,8 @@ class MORENN_OT_ue_push(bpy.types.Operator):
 
 
 def _apply_ue_report(context, ue_report, report):
+    for warning in ue_report.get("warnings", []):
+        report.warning(f"UE: {warning}")
     for item in ue_report.get("items", []):
         if item.get("success"):
             report.info(f"UE imported {item['file']}: {', '.join(item.get('imported', []))}")

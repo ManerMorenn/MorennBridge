@@ -116,25 +116,53 @@ def build_interchange_pipeline(item, options):
     return p
 
 
-def verify_translator_settings():
-    cls = getattr(unreal, "InterchangeFbxTranslatorSettings", None)
-    if cls is None:
-        return
-    try:
-        settings = cls()
-        settings.load_settings()
-        changed = False
-        if C.getp(settings, "force_front_x_axis", False):
-            C.setp(settings, "force_front_x_axis", False)
-            changed = True
-        if C.getp(settings, "use_ufbx_parser", False):
-            C.setp(settings, "use_ufbx_parser", False)
-            changed = True
-        if changed:
-            settings.save_settings()
-            C.warn("Interchange FBX translator settings corrected (Force Front X Axis / ufbx parser off)")
-    except Exception:
-        C.warn("Could not verify Interchange FBX translator settings")
+# Interchange reads these from the user's EditorPerProjectUserSettings.ini, never from the pipeline
+TRANSLATOR_REQUIRED = {"force_front_x_axis": False, "use_ufbx_parser": False}
+TRANSLATOR_LABELS = {"force_front_x_axis": "Force Front X Axis", "use_ufbx_parser": "Use uFBX Translator"}
+
+
+class TranslatorSettingsOverride:
+    """Turns off the FBX translator settings our files cannot use during the import, then restores the user's."""
+
+    def __init__(self, active=True):
+        self.active = active
+        self.settings = None
+        self.changed = {}
+        self.warnings = []
+
+    def __enter__(self):
+        cls = getattr(unreal, "InterchangeFbxTranslatorSettings", None) if self.active else None
+        if cls is None:
+            return self
+        try:
+            settings = cls()
+            settings.load_settings()
+            for name, value in TRANSLATOR_REQUIRED.items():
+                current = C.getp(settings, name)
+                if current is not None and current != value and C.setp(settings, name, value):
+                    self.changed[name] = current
+            if self.changed:
+                settings.save_settings()
+                self.settings = settings
+                labels = ", ".join(TRANSLATOR_LABELS[n] for n in self.changed)
+                self.note(f"Imported with the FBX translator setting(s) {labels} off; your settings are restored")
+        except Exception as exc:
+            self.note(f"Could not check the Interchange FBX translator settings: {exc}")
+        return self
+
+    def __exit__(self, *exc_info):
+        if self.settings is not None:
+            try:
+                for name, value in self.changed.items():
+                    C.setp(self.settings, name, value)
+                self.settings.save_settings()
+            except Exception as exc:
+                self.note(f"Could not restore the Interchange FBX translator settings: {exc}")
+        return False
+
+    def note(self, message):
+        self.warnings.append(message)
+        C.log(message)
 
 
 def import_interchange(item, options):
@@ -330,22 +358,22 @@ def run(manifest_path):
         manifest = json.load(fh)
     options = manifest.get("options", {})
     use_interchange = manifest.get("ue_importer", "INTERCHANGE") == "INTERCHANGE"
-    if use_interchange:
-        verify_translator_settings()
     report = {"ok": True, "engine": unreal.SystemLibrary.get_engine_version(), "items": []}
-    for item in manifest.get("items", []):
-        # animations need the skeleton created by a previous item of the same batch
-        if item["kind"] == KIND_ANIMATION and not item.get("skeleton"):
-            src = item.get("source_armature")
-            for done in report["items"]:
-                if done.get("skeleton") and done.get("source_armature") == src:
-                    item["skeleton"] = done["skeleton"]
-                    break
-        r = import_item(item, options, use_interchange)
-        r["source_armature"] = item.get("source_armature")
-        report["items"].append(r)
-        report["ok"] = report["ok"] and r["success"]
-        C.log(f"{item['file']}: {'ok' if r['success'] else 'FAILED'} -> {', '.join(r['imported'])}")
+    with TranslatorSettingsOverride(active=use_interchange) as translator:
+        for item in manifest.get("items", []):
+            # animations need the skeleton created by a previous item of the same batch
+            if item["kind"] == KIND_ANIMATION and not item.get("skeleton"):
+                src = item.get("source_armature")
+                for done in report["items"]:
+                    if done.get("skeleton") and done.get("source_armature") == src:
+                        item["skeleton"] = done["skeleton"]
+                        break
+            r = import_item(item, options, use_interchange)
+            r["source_armature"] = item.get("source_armature")
+            report["items"].append(r)
+            report["ok"] = report["ok"] and r["success"]
+            C.log(f"{item['file']}: {'ok' if r['success'] else 'FAILED'} -> {', '.join(r['imported'])}")
+    report["warnings"] = translator.warnings
     C.set_result(report, manifest_path + ".result.json")
     return report
 

@@ -32,7 +32,10 @@ manifest records where MorennBridge expects the asset.
     ```
 
 3. **Firewall**: allow the editor to accept local connections (the bridge only uses loopback traffic).
-4. **Interchange**: Project Settings → Interchange → FBX translator: *Force Front X Axis* **off** (the bridge verifies it).
+4. **Interchange FBX translator**: these settings belong to each user and are not in Project Settings. The
+   *Translator Settings* button of the Interchange import dialog opens them; keep *Force Front X Axis* off for
+   manual imports. A push imports with *Force Front X Axis* and the experimental uFBX translator off, then puts your
+   settings back, and the Log says so.
 5. **Blender**: Preferences → System → *Allow Online Access* must be enabled, otherwise the add-on refuses to open sockets.
 6. In Blender's *Unreal Link* panel click *Find Unreal*; the project name appears in the list. Export with
    *Push to Unreal after export* enabled, or push the last export manually.

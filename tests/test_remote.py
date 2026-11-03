@@ -291,9 +291,10 @@ class UnrealOperatorTests(unittest.TestCase):
         manifest = self.export_cube()
         item = {"file": "SM_Crate.fbx", "success": True, "imported": ["/Game/SM_Crate"], "warnings": ["/Game/X gone"]}
         with open(manifest + ".result.json", "w", encoding="utf-8") as fh:
-            json.dump({"items": [item]}, fh)
+            json.dump({"items": [item], "warnings": ["Imported with Force Front X Axis off"]}, fh)
         self.assertEqual(fixtures.call(bpy.ops.morenn.ue_push), {"FINISHED"})
         self.assertIn("WARNING: UE, SM_Crate.fbx: /Game/X gone", fixtures.log_text())
+        self.assertIn("WARNING: UE: Imported with Force Front X Axis off", fixtures.log_text())
 
     def test_push_without_a_connection_back(self):
         self.start_fake_editor()

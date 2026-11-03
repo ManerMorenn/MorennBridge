@@ -38,7 +38,7 @@ Bone names must survive Unreal's sanitising (`spine.001` would become `spine_001
 - Static Meshes: *Combine Static Meshes* **Do Not Combine** (a combined MorennBridge file then yields one asset per node), *Import Collision According To Mesh Name* on, *One Convex Hull Per UCX* on, Nanite/lightmap UVs as you prefer.
 - Skeletal Meshes: *Import Morph Targets* on, *Use T0 As Ref Pose* off, *Create Physics Asset* as you prefer, *Bone Influence Limit* 0 (engine max) or 8.
 - Animations: *Animation Range* Timeline, *Import Bone Tracks* on; pick the Skeleton created by the mesh import.
-- Project settings → Interchange → FBX: *Force Front X Axis* **off**.
+- *Translator Settings* (button in the import dialog, saved per user): *Force Front X Axis* **off**.
 
 **Legacy FBX importer** (set `Interchange.FeatureFlags.Import.FBX=0`): Normal Import Method *Import Normals* (and Tangents), *Import Mesh LODs* on, *Convert Scene Unit* on, *Force Front X Axis* off, *Auto Generate Collision* off when UCX pieces are provided. Several meshes in one file are named `<File>_<Node>` by this importer; use one file per asset.
 

@@ -292,6 +292,62 @@ class InterchangeImportTests(UnrealScriptCase):
         self.assertTrue(any("SM_Crate.fbx" in m for m in U.messages("Error")))
 
 
+class TranslatorSettingsTests(UnrealScriptCase):
+    CONFIG = "InterchangeFbxTranslatorSettings"
+
+    def push_crate(self, importer="INTERCHANGE"):
+        item = self.item("STATIC_MESH", "SM_Crate")
+        U.plan_import(item["path"], [("StaticMesh", "SM_Crate")])
+        report, _ = self.import_manifest([item], importer=importer)
+        return report
+
+    def test_user_settings_are_used_when_they_fit(self):
+        report = self.push_crate()
+        self.assertEqual(report["warnings"], [])
+        self.assertEqual(U.STATE.translator_config, {})
+
+    def test_unusable_settings_are_off_during_the_import_only(self):
+        user = {"force_front_x_axis": True, "use_ufbx_parser": True, "convert_scene": True}
+        U.STATE.translator_config[self.CONFIG] = dict(user)
+        report = self.push_crate()
+        self.assertTrue(report["ok"])
+        used = U.STATE.imports[0]["translator"]
+        self.assertFalse(used["force_front_x_axis"])
+        self.assertFalse(used["use_ufbx_parser"])
+        restored = U.STATE.translator_config[self.CONFIG]
+        self.assertEqual({k: restored[k] for k in user}, user)
+        self.assertEqual(len(report["warnings"]), 1)
+        self.assertIn("Force Front X Axis, Use uFBX Translator off", report["warnings"][0])
+
+    def test_legacy_imports_leave_the_translator_alone(self):
+        U.STATE.translator_config[self.CONFIG] = {"force_front_x_axis": True}
+        report = self.push_crate(importer="LEGACY")
+        self.assertEqual(report["warnings"], [])
+        self.assertEqual(U.STATE.translator_config[self.CONFIG], {"force_front_x_axis": True})
+
+    def test_problems_with_the_settings_do_not_stop_the_import(self):
+        failing_once = [RuntimeError("no ini"), None]
+        with mock.patch.object(U.InterchangeTranslatorSettings, "load_settings", side_effect=failing_once):
+            report = self.push_crate()
+        self.assertTrue(report["ok"])
+        self.assertIn("Could not check the Interchange FBX translator settings: no ini", report["warnings"])
+        U.reset()
+        U.STATE.translator_config[self.CONFIG] = {"force_front_x_axis": True}
+        original = U.InterchangeTranslatorSettings.save_settings
+        calls = []
+
+        def save_once(settings):
+            calls.append(1)
+            if len(calls) > 1:
+                raise RuntimeError("read-only ini")
+            original(settings)
+
+        with mock.patch.object(U.InterchangeTranslatorSettings, "save_settings", save_once):
+            report = self.push_crate()
+        self.assertTrue(report["ok"])
+        self.assertIn("Could not restore the Interchange FBX translator settings: read-only ini", report["warnings"])
+
+
 class LegacyImportTests(UnrealScriptCase):
     def test_static_mesh_task(self):
         item = self.item("STATIC_MESH", "SM_Crate")
