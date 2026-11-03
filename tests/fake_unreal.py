@@ -12,6 +12,7 @@ Tests describe what an import creates with ``STATE.plan[<fbx path>] = [(class na
 import os
 
 ENGINE_VERSION = "5.8.4-58902052+++UE5+Release-5.8"
+HELPERS = ("reset", "messages", "add_asset", "plan_import", "Prop")
 
 
 class _State:

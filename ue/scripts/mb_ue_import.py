@@ -219,7 +219,7 @@ def import_legacy(item, options):
     if smd is not None:
         if normals is not None:
             C.setp(smd, "normal_import_method", normals)
-        C.setp(smd, "import_mesh_lo_ds", True, alternatives=("import_mesh_lods",))
+        C.setp(smd, "import_mesh_lods", True, alternatives=("import_mesh_lo_ds",))
         C.setp(smd, "combine_meshes", False)
         C.setp(smd, "auto_generate_collision", False)
         C.setp(
@@ -240,7 +240,7 @@ def import_legacy(item, options):
         if normals is not None:
             C.setp(skd, "normal_import_method", normals)
         C.setp(skd, "import_morph_targets", True)
-        C.setp(skd, "import_mesh_lo_ds", True, alternatives=("import_mesh_lods",))
+        C.setp(skd, "import_mesh_lods", True, alternatives=("import_mesh_lo_ds",))
         C.setp(skd, "import_meshes_in_bone_hierarchy", False)
         C.setp(skd, "use_t0_as_ref_pose", False)
         C.setp(skd, "convert_scene", True)

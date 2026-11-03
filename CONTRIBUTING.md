@@ -32,7 +32,10 @@ Code is formatted by `ruff format`, with 120 columns. Keep comments short and fa
 its own folder, change other add-ons, or use the network unless `bpy.app.online_access` is on.
 
 Blender API differences between versions belong in `compat.py`. Code that runs inside Unreal lives in `ue/scripts`,
-and anything touching the `unreal` module needs a check in a live editor before it counts as done.
+and anything touching the `unreal` module needs a check in a live editor before it counts as done. The tests run
+these scripts against `tests/fake_unreal.py`. Every Unreal name they use, and every name the fake declares, must exist
+in the editor's Python stub: with *Developer Mode* on (Editor Preferences → Plugins → Python), the editor writes it
+to `<Project>/Intermediate/PythonStub/unreal.py`, and `python dev/check_ue_names.py <stub>` compares.
 
 ## Versions
 
