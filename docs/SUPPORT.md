@@ -10,7 +10,7 @@
 | Blender 4.4 and older | Not supported: the FBX importer and smoothing options the add-on relies on do not exist there |
 | Linux, Windows, macOS | Tested in CI |
 | Unreal Engine 5.8 | Target version, written against the engine source. Not yet confirmed in a live editor |
-| Other Unreal 5.x versions | Untested |
+| Other Unreal versions | Not supported |
 
 The test suite runs on every supported Blender version, and on Blender's daily builds twice a week.
 
