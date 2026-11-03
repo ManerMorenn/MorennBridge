@@ -5,6 +5,7 @@ import unittest
 import bpy
 
 from tests import fixtures
+from tests.test_export_anim import _animated_character
 from tests.test_export_skeletal import _rigged_character
 
 
@@ -100,6 +101,37 @@ class ImportUETests(unittest.TestCase):
         mesh = [o for o in res.objects if o.type == "MESH"][0]
         got_verts = sorted((mesh.matrix_world @ v.co).to_tuple(3) for v in mesh.data.vertices)
         self.assertEqual(got_verts, sorted(v.to_tuple(3) for v in verts))
+
+    def test_take_end_wins_over_a_trailing_key(self):
+        """Unreal writes one key past the end of an animation; the take's time span says where it ends."""
+        rig, _body = _animated_character()
+        settings = fixtures.export_settings(self.tmp)
+        groups = fixtures.addon_module("core.classify").build_anim_groups(
+            [rig], self.prefs, bpy.context.scene, source="ACTIVE_ACTION", destination=settings.destination_path
+        )
+        done, _ = fixtures.addon_module("core.export_fbx").export_groups(bpy.context, groups, settings, self.Report())
+        tree, insp = fixtures.addon_module("fbxpatch.tree"), fixtures.addon_module("fbxpatch.inspect")
+        root, version = tree.load(done[0].path)
+        fixtures.addon_module("fbxpatch.patches").rename_anim_stack(root, "Unreal Take")
+        stack = insp.anim_stacks(root)[0]
+        ticks_per_frame = self.import_fbx.FBX_TICKS_PER_SECOND / bpy.context.scene.render.fps
+        start = insp.prop_values(stack, b"LocalStart")[0] / ticks_per_frame
+        stop = next(p for p in stack.find(b"Properties70").elems if p.props[0] == b"LocalStop")
+        last_key = round(stop.props[4] / ticks_per_frame)
+        stop.props[4] = round((last_key - 1) * ticks_per_frame)
+        path = os.path.join(self.tmp, "A_Run.fbx")
+        tree.save(path, root, version)
+        fixtures.fresh_scene(cm=True)
+        report = self.Report()
+        action = self.import_fbx.import_file(bpy.context, path, self.prefs, report).actions[0]
+        self.assertEqual(action.name, "A_Run")
+        self.assertTrue(action.use_frame_range)
+        self.assertEqual((action.frame_start, action.frame_end), (round(start, 3), last_key - 1))
+        self.assertIn(f"to {last_key - 1:g} from the file", fixtures.report_text(report))
+        fixtures.fresh_scene(cm=True)
+        self.assertFalse(
+            self.import_fbx.import_file(bpy.context, done[0].path, self.prefs, report).actions[0].use_frame_range
+        )
 
     def test_metre_scene_rescales(self):
         path, rig, body = make_ue_style_file(self.tmp)

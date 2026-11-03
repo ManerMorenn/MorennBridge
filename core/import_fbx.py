@@ -24,6 +24,7 @@ class ImportInfo:
     root_bones: list = field(default_factory=list)
     lod_groups: list = field(default_factory=list)
     anim_stacks: list = field(default_factory=list)
+    anim_ranges: list = field(default_factory=list)  # (start, stop) seconds per stack, None when not stored
     has_skin: bool = False
     mesh_nodes: list = field(default_factory=list)
     null_nodes: list = field(default_factory=list)
@@ -71,11 +72,25 @@ def analyze(root):
     info.marker_axes_map = patches.get_globalsettings_string(root, MARKER_AXES_MAP) or ""
     info.root_bones = patches.root_bone_names(root)
     info.lod_groups = patches.lod_groups(root)
-    info.anim_stacks = [I.object_name(s).decode("utf-8", "replace") for s in I.anim_stacks(root)]
+    stacks = I.anim_stacks(root)
+    info.anim_stacks = [I.object_name(s).decode("utf-8", "replace") for s in stacks]
+    info.anim_ranges = [_stack_range(s) for s in stacks]
     info.has_skin = bool(I.find_objects(root, b"Deformer", subclass=b"Skin"))
     info.mesh_nodes = I.model_names(root, b"Mesh")
     info.null_nodes = I.model_names(root, b"Null")
     return info
+
+
+FBX_TICKS_PER_SECOND = 46186158000
+
+
+def _stack_range(stack):
+    """``(start, stop)`` in seconds from an AnimationStack, or None when the file does not store a stop time."""
+    stop = I.prop_values(stack, b"LocalStop") or I.prop_values(stack, b"ReferenceStop")
+    if not stop:
+        return None
+    start = I.prop_values(stack, b"LocalStart") or I.prop_values(stack, b"ReferenceStart") or [0]
+    return start[0] / FBX_TICKS_PER_SECOND, stop[0] / FBX_TICKS_PER_SECOND
 
 
 def _temporary_copy_path(filepath):
@@ -178,6 +193,7 @@ def import_file(context, filepath, prefs, report, convert_axes=None, tidy=None, 
     stem = os.path.splitext(os.path.basename(filepath))[0]
     for arm in result.armatures:
         _post_process_armature(context, arm, result, prefs, report, convert_axes, reset_pose, stem)
+    _apply_take_ranges(context, result, prefs, report)
     _rename_actions(result, stem, report)
     if tidy:
         _tidy(context, result, stem, report)
@@ -255,6 +271,30 @@ def _post_process_armature(context, arm, result, prefs, report, convert_axes, re
 def _near_identity(m, tol=1e-4):
     ident = Matrix.Identity(4)
     return all(abs(m[i][j] - ident[i][j]) <= tol for i in range(4) for j in range(4))
+
+
+def _apply_take_ranges(context, result, prefs, report):
+    """Use the take's time span as the action's frame range when the keys run past it.
+
+    Unreal writes one key after the end of every animation; without this, it would come back one frame longer.
+    """
+    ranges = {name: span for name, span in zip(result.info.anim_stacks, result.info.anim_ranges) if span}
+    if not ranges or not result.actions:
+        return
+    fps = context.scene.render.fps / context.scene.render.fps_base
+    offset = float(prefs.import_anim_offset)
+    for action in result.actions:
+        span = ranges.get(action.name) or (next(iter(ranges.values())) if len(ranges) == 1 else None)
+        if span is None:
+            continue
+        first, last = round(span[0] * fps + offset, 3), round(span[1] * fps + offset, 3)
+        if action.frame_range[1] <= last + 1e-3 or last <= first:
+            continue
+        action.use_frame_range = True
+        action.frame_start, action.frame_end = first, last
+        report.info(
+            f"'{action.name}': frame range {first:g} to {last:g} from the file (its last key lies past the end)"
+        )
 
 
 def _rename_actions(result, stem, report):
