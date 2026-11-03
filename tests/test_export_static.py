@@ -96,7 +96,7 @@ class StaticExportTests(unittest.TestCase):
         self.assertEqual(len(done), 1)
         root, _ = fixtures.fbx_load(done[0].path)
         names = set(fixtures.fbx_models(root))
-        self.assertEqual(names, {"LOD0_SM_Crate", "LOD1_SM_Crate", "UCX_LOD0_SM_Crate_01", "SOCKET_Lid"})
+        self.assertEqual(names, {"LOD0_SM_Crate", "LOD1_SM_Crate", "UCX_SM_Crate_01", "SOCKET_Lid"})
         models = fixtures.fbx_models(root)
         # socket is a child of the LOD0 node, at the right local position (cm)
         sock_id = self.I.object_id(models["SOCKET_Lid"])
@@ -104,7 +104,7 @@ class StaticExportTests(unittest.TestCase):
         self.assertEqual(parents[0][2], self.I.object_id(models["LOD0_SM_Crate"]))
         t = self.I.prop_values(models["SOCKET_Lid"], b"Lcl Translation")
         fixtures.assert_vec_close(self, t, (0, 0, 60), places=3)
-        geom = fixtures.fbx_geometry_for_model(root, models["UCX_LOD0_SM_Crate_01"])
+        geom = fixtures.fbx_geometry_for_model(root, models["UCX_SM_Crate_01"])
         self.assertIsNone(geom.find(b"LayerElementUV"))
         with open(manifest_path) as fh:
             item = json.load(fh)["items"][0]
@@ -134,6 +134,25 @@ class StaticExportTests(unittest.TestCase):
         self.assertIn("SM_Crate_LOD2", names)
         group = bpy.data.objects["SM_Crate"]
         self.assertEqual({c.name for c in group.children}, {"SM_Crate_LOD0", "SM_Crate_LOD1", "SM_Crate_LOD2"})
+
+    def test_collision_names_follow_the_importer(self):
+        crate = fixtures.make_cube("Crate", size=100.0)
+        fixtures.make_cube("Crate_LOD1", size=90.0)
+        fixtures.make_cube("UBX_Crate", size=110.0, uv=False, color=False, material=False)
+        fixtures.make_empty("SOCKET_Lid", location=(0, 0, 60), parent=crate)
+        cases = (
+            ("INTERCHANGE", "LOD_NAMING", "UBX_SM_Crate_01", False),
+            ("INTERCHANGE", "LODGROUP_NODES", "UBX_SM_Crate_01", True),
+            ("LEGACY", "LODGROUP_NODES", "UBX_SM_Crate_LOD0_01", False),
+        )
+        for importer, lod_mode, expected, socket_warning in cases:
+            with self.subTest(importer=importer, lod_mode=lod_mode):
+                out = os.path.join(self.tmp, f"{importer}_{lod_mode}")
+                done, _, report = fixtures.run_export([crate], out, ue_importer=importer, lod_mode=lod_mode)
+                self.assertTrue(report.ok, fixtures.report_text(report))
+                self.assertIn(expected, fixtures.fbx_models(fixtures.fbx_load(done[0].path)[0]))
+                warned = "ignores sockets inside FBX LOD groups" in fixtures.report_text(report)
+                self.assertEqual(warned, socket_warning)
 
     def test_combined_file_names_nodes(self):
         a = fixtures.make_cube("Crate", size=100.0)

@@ -20,6 +20,8 @@ See the [user guide](USER_GUIDE.md) for the panel-by-panel walkthrough.
 
 Prefixes are stripped before being re-applied (`SM_Crate` does not become `SM_SM_Crate`); `.001` suffixes are removed; ASCII punctuation (`.`, space, `/`, …) is replaced, accents and non-Latin letters are kept. Use *Export name* on the object to override the base name.
 
+Collision pieces are named after the asset, also when it has LODs (`UCX_SM_Crate_01`): Interchange binds them to the mesh or to its LOD group. The legacy importer binds them to the LOD0 node, so with LODs and *UE importer = Legacy* they are named `UCX_SM_Crate_LOD0_01`. Interchange ignores everything inside an FBX LOD group, sockets included: keep the `LOD<i>_Name` LOD mode (the default for Interchange) for meshes with sockets.
+
 A curve, surface, text or metaball exports like a static mesh. A collection instance exports as one static mesh named after the instancer, joining the meshes of the collection.
 
 Hidden objects are skipped, including objects in excluded collections. Collision, LOD and socket objects follow their mesh even when hidden.

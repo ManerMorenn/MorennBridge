@@ -28,7 +28,11 @@ FILE_MODE_ITEMS = [
 LOD_MODE_ITEMS = [
     ("AUTO", "Auto", "LOD naming for Interchange, LodGroup nodes for the legacy importer"),
     ("LOD_NAMING", "LOD<i>_Name nodes", "Interchange name pattern (no LodGroup node, zero risk)"),
-    ("LODGROUP_NODES", "FBX LodGroup nodes", "Real LOD group nodes injected after export (both UE importers)"),
+    (
+        "LODGROUP_NODES",
+        "FBX LodGroup nodes",
+        "Real LOD group nodes injected after export (both UE importers; Interchange ignores sockets inside them)",
+    ),
     ("NONE", "LOD0 only", "Ignore LOD chains"),
 ]
 UE_IMPORTER_ITEMS = [

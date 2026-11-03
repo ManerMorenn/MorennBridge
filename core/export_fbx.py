@@ -147,10 +147,12 @@ def _stage_static_group(st, group, settings, lod_mode, node_names, report):
     elif group.lods:
         report.info(f"'{group.asset_name}': LOD objects ignored (LOD mode = NONE)")
 
+    # Interchange binds collision to the mesh or LOD container (named after the asset), legacy to the LOD0 node
+    collision_body = group.asset_name if settings.ue_importer == "INTERCHANGE" else render_node
     counters = {}
     for obj, kind in group.collisions:
         counters[kind] = counters.get(kind, 0) + 1
-        node = take(naming.collision_node_name(kind, render_node, counters[kind]))
+        node = take(naming.collision_node_name(kind, collision_body, counters[kind]))
         st.stage_mesh(
             obj,
             node,
@@ -162,6 +164,10 @@ def _stage_static_group(st, group, settings, lod_mode, node_names, report):
             keep_materials=False,
         )
         entry["collisions"] += 1
+    if group.sockets and has_lods and lod_mode == "LODGROUP_NODES" and settings.ue_importer == "INTERCHANGE":
+        report.warning(
+            f"'{group.asset_name}': Interchange ignores sockets inside FBX LOD groups; use the LOD<i>_Name LOD mode"
+        )
     for sock in group.sockets:
         base = sock.name[len(naming.SOCKET_PREFIX) :] if naming.is_socket_name(sock.name) else sock.name
         node = take(naming.socket_node_name(naming.sanitize_ue_name(base)))
