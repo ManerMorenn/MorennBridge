@@ -158,32 +158,40 @@ class StaticExportTests(unittest.TestCase):
         """Unreal's legacy AddBoxGeomFromTris compares later faces of an axis with the second plane only."""
         crate = fixtures.make_cube("Crate", size=100.0)
         fixtures.make_cube("UBX_Crate", size=8.0, location=(0, 0, 10), uv=False, color=False, material=False)
+        beam = fixtures.make_cube("UBX_Crate_02", size=10.0, uv=False, color=False, material=False)
+        beam.scale = (20.0, 1.0, 1.0)
+        beam.rotation_euler = (0.0, 0.0, math.radians(40.0))  # 200 x 10 x 10, its sides are no axis planes
+        bpy.context.view_layer.update()
         done, _, report = fixtures.run_export([crate], self.tmp, ue_importer="LEGACY")
         self.assertTrue(report.ok, fixtures.report_text(report))
         root, _ = fixtures.fbx_load(done[0].path)
-        geometry = fixtures.fbx_geometry_for_model(root, fixtures.fbx_models(root)["UBX_SM_Crate_01"])
-        vertices = [Vector(v) for v in fixtures.fbx_vertices(geometry)]
-        indices = geometry.find(b"PolygonVertexIndex").props[0]
-        planes = []
-        polygon = []
-        for index in indices:
-            polygon.append(index if index >= 0 else -index - 1)
-            if index >= 0:
-                continue
-            a, b, c = (vertices[i] for i in polygon[:3])
-            normal = (b - a).cross(c - a).normalized()
-            polygon = []
-            for plane in planes:
-                if abs(abs(normal.dot(plane["normal"])) - 1.0) < 1e-3:
-                    distance = a.dot(plane["normal"])
-                    if len(plane["distances"]) == 1 and abs(distance - plane["distances"][0]) > 1e-3:
-                        plane["distances"].append(distance)
-                    elif len(plane["distances"]) == 2:
-                        self.assertLess(abs(distance - plane["distances"][1]), 1e-3, "faces of a side interleaved")
-                    break
-            else:
-                planes.append({"normal": normal, "distances": [a.dot(normal)]})
-        self.assertEqual([len(p["distances"]) for p in planes], [2, 2, 2])
+        boxes = sorted(name for name in fixtures.fbx_models(root) if name.startswith("UBX_"))
+        self.assertEqual(len(boxes), 2)
+        for name in boxes:
+            with self.subTest(box=name):
+                geometry = fixtures.fbx_geometry_for_model(root, fixtures.fbx_models(root)[name])
+                vertices = [Vector(v) for v in fixtures.fbx_vertices(geometry)]
+                indices = geometry.find(b"PolygonVertexIndex").props[0]
+                planes = []
+                polygon = []
+                for index in indices:
+                    polygon.append(index if index >= 0 else -index - 1)
+                    if index >= 0:
+                        continue
+                    a, b, c = (vertices[i] for i in polygon[:3])
+                    normal = (b - a).cross(c - a).normalized()
+                    polygon = []
+                    for plane in planes:
+                        if abs(abs(normal.dot(plane["normal"])) - 1.0) < 1e-3:
+                            distance = a.dot(plane["normal"])
+                            if len(plane["distances"]) == 1 and abs(distance - plane["distances"][0]) > 1e-3:
+                                plane["distances"].append(distance)
+                            elif len(plane["distances"]) == 2:
+                                self.assertLess(abs(distance - plane["distances"][1]), 1e-3, "sides interleaved")
+                            break
+                    else:
+                        planes.append({"normal": normal, "distances": [a.dot(normal)]})
+                self.assertEqual([len(p["distances"]) for p in planes], [2, 2, 2])
 
     def test_combined_file_names_nodes(self):
         a = fixtures.make_cube("Crate", size=100.0)

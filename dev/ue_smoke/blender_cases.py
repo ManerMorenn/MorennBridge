@@ -135,22 +135,26 @@ def case_single_file_collision(smoke):
 
 
 def tower():
-    """A sphere with two LODs, a convex and a box collision piece and a socket."""
+    """A sphere with two LODs, a convex and two box collision pieces (one turned) and a socket."""
     fixtures.fresh_scene(cm=True)
     lods = [
         fixtures.make_sphere("Tower", segments=32, rings=16, radius=20.0),
         fixtures.make_sphere("Tower_LOD1", segments=16, rings=8, radius=20.0),
         fixtures.make_sphere("Tower_LOD2", segments=8, rings=4, radius=20.0),
     ]
-    for name, size, z in (("UCX_Tower", 10.0, -10.0), ("UBX_Tower", 8.0, 10.0)):
+    for name, size, z in (("UCX_Tower", 10.0, -10.0), ("UBX_Tower", 8.0, 10.0), ("UBX_Tower_02", 10.0, 40.0)):
         fixtures.make_cube(name, size=size, location=(0, 0, z), uv=False, color=False, material=False)
+    beam = bpy.data.objects["UBX_Tower_02"]
+    beam.scale = (20.0, 1.0, 1.0)
+    beam.rotation_euler = (0.0, 0.0, math.radians(40.0))  # 200 x 10 x 10, its sides are no axis planes
     fixtures.make_empty("SOCKET_Top", location=(5, 3, 30), parent=lods[0])
     bpy.context.view_layer.update()
     expect = {
         "triangles": [triangles(o) for o in lods],
         "bounds": bounds(lods[0]),
-        "simple_collision": 2,
+        "simple_collision": 3,
         "convex_collision": 1,
+        "box_collision": 2,
         "sockets": {"Top": ue(Vector((5, 3, 30)))},
     }
     return lods[0], {"static_meshes": {"SM_Tower": expect}, "only_static_meshes": ["SM_Tower"]}

@@ -105,6 +105,8 @@ def check_static(case, name, exp):
         case.check(total == exp.get("simple_collision", total), f"{name}: simple collision shapes", shapes)
         convex = shapes.get("convex_elems", 0)
         case.check(convex == exp.get("convex_collision", convex), f"{name}: convex pieces", convex)
+        boxes = shapes.get("box_elems", 0)
+        case.check(boxes == exp.get("box_collision", boxes), f"{name}: box pieces", boxes)
     if "complex_collision" in exp:
         linked = mesh.get_editor_property("complex_collision_mesh")
         got = linked.get_name() if linked else None
