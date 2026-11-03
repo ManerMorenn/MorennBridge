@@ -30,6 +30,7 @@ MANNEQUIN = (
     "/Game/Characters/Mannequins/Anims/Unarmed/MM_Idle",
     "/Game/Characters/Mannequins/Anims/Unarmed/Jog/MF_Unarmed_Jog_Fwd",
 )
+FULL_MANNY = "/Game/Characters/Mannequins/Meshes/SKM_Manny"
 
 
 def vec(v):
@@ -355,11 +356,39 @@ def compare_animation(case, name, exp):
         )
 
 
+def mesh_state(mesh):
+    """What a push over an existing mesh may change."""
+    slots = mesh.get_editor_property("materials" if isinstance(mesh, unreal.SkeletalMesh) else "static_materials")
+    state = {
+        "triangles per LOD": lod_triangles(mesh),
+        "materials": [short(s.get_editor_property("material_interface").get_path_name()) for s in slots],
+    }
+    if isinstance(mesh, unreal.SkeletalMesh):
+        for prop in ("skeleton", "physics_asset"):
+            value = mesh.get_editor_property(prop)
+            state[prop] = value.get_path_name() if value else None
+    return state
+
+
+def check_reimport(case, name, exp, before):
+    """``before``: the state of the copy that was pushed over; ``exp``: the changes the push may make."""
+    mesh = case.load(name)
+    if not case.check(mesh is not None, f"{name} still there"):
+        return
+    after = mesh_state(mesh)
+    for key, value in before.items():
+        wanted = exp.get(key, value)
+        case.check(after[key] == wanted, f"{name}: {key} after the push", f"{after[key]}, before {value}")
+
+
 def run_case(data, root):
     folder = f"{root}/{data['name']}"
     case = Case(data, folder)
     if LIB.does_directory_exist(folder):
         LIB.delete_directory(folder)
+    before = {}
+    for name, e in data["expect"].get("reimport", {}).items():  # a copy of an existing asset, pushed over
+        before[name] = mesh_state(LIB.duplicate_asset(e["source"], f"{folder}/{name}"))
     for manifest in data["manifests"]:
         report = mb_import.run(manifest)
         case.reports.append(report)
@@ -383,9 +412,14 @@ def run_case(data, root):
         compare_skeletal(case, name, e)
     for name, e in exp.get("compare_animations", {}).items():
         compare_animation(case, name, e)
+    for name, e in exp.get("reimport", {}).items():
+        check_reimport(case, name, e, before[name])
     classes = asset_classes(folder)
     for name in exp.get("absent", []):
         case.check(classes.get(name) in (None, "ObjectRedirector"), f"no asset left as {name}", classes.get(name))
+    if "folder_assets" in exp:
+        found = {n: c for n, c in classes.items() if c != "ObjectRedirector"}
+        case.check(found == exp["folder_assets"], "assets in the folder, no duplicates", found)
     return case
 
 
@@ -409,7 +443,8 @@ def check(cases_path, results_path):
 
 
 def export_mannequin(out_dir):
-    report = mb_export.run(out_dir, list(MANNEQUIN))
+    extra = [FULL_MANNY] if LIB.does_asset_exist(FULL_MANNY) else []  # not in UE 5.8's template
+    report = mb_export.run(out_dir, list(MANNEQUIN) + extra)
     unreal.log(f"[smoke] mannequin export: {'ok' if report['ok'] else 'FAILED'}")
 
 

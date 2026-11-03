@@ -277,6 +277,37 @@ def case_skeletal_lods(smoke, name, importer):
     smoke.add(name, 5, [manifest], expect)
 
 
+def case_push_twice(smoke):
+    """Re-import loop: a static mesh, a skeletal mesh and an animation pushed twice into the same folder."""
+    fixtures.fresh_scene(cm=True).render.fps = 30
+    crate = fixtures.make_cube("Crate", size=40.0, location=(100, 0, 0))
+    rig, _body = rigged_character("Hero", bones=3, bone_length=30.0, shape_key=False)
+    key_pose(rig, 1, (0, 0, 0), 0)
+    key_pose(rig, 10, (0, 20, 0), 45)
+    rig.animation_data.action.name = "Walk"
+    bpy.context.view_layer.update()
+    static = smoke.export("push_twice", "static", [crate])
+    first = smoke.export("push_twice", "skeletal", [rig])
+    rig.data.morenn.ue_skeleton_path = f"{smoke.root}/push_twice/SKEL_Hero"  # what the first push reports back
+    again = smoke.export("push_twice", "skeletal_again", [rig])
+    anim = smoke.export("push_twice", "anim", [rig], mode="ANIMATION")
+    expect = {
+        "folder_assets": {
+            "SM_Crate": "StaticMesh",
+            "M_Test": "MaterialInstanceConstant",  # Interchange makes every FBX material an instance
+            "SKM_Hero": "SkeletalMesh",
+            "SKEL_Hero": "Skeleton",
+            "PHYS_Hero": "PhysicsAsset",
+            "A_Hero_Walk": "AnimSequence",
+        },
+        "skeletal_meshes": {
+            "SKM_Hero": {"skeleton": "SKEL_Hero", "bones": bone_expect(rig, ["root", "bone_01", "bone_02"])}
+        },
+        "animations": {"A_Hero_Walk": {"skeleton": f"{smoke.root}/push_twice/SKEL_Hero", "keys": 10, "length": 0.3}},
+    }
+    smoke.add("push_twice", "re-import loop", [static, first, anim, static, again, anim], expect)
+
+
 def key_pose(rig, frame, root_location, bend_degrees):
     root = rig.pose.bones["root"]
     root.location = root_location
@@ -412,6 +443,11 @@ def case_mannequin(smoke, ue_export):
     on_skeleton = smoke.export("mannequin_on_skeleton", "mesh", [rig])
     compare = {"reference": original, "skeleton": "SKEL_Manny_Simple", "bones": bones}
     smoke.add("mannequin", 5, [own_skeleton], {"compare_skeletal": {"SKM_Manny_Simple": compare}})
+    # pulled, then pushed back over the asset (a copy of it), with and without its LODs
+    for name, prefs in (("reimport_lods", {}), ("reimport_no_lods", {"lod_mode": "NONE"})):
+        manifest = smoke.export(name, "mesh", [rig], **prefs)
+        expect = {"reimport": {"SKM_Manny_Simple": {"source": original}}}
+        smoke.add(name, "re-import loop", [manifest], dict(expect, folder_assets={"SKM_Manny_Simple": "SkeletalMesh"}))
     anims = {}
     manifests = [on_skeleton]
     for stem in ("MM_Idle", "MF_Unarmed_Jog_Fwd"):
@@ -427,6 +463,17 @@ def case_mannequin(smoke, ue_export):
         "compare_animations": anims,
     }
     smoke.add("mannequin_on_skeleton", 6, manifests, expect)
+    if "SKM_Manny" in pulled:  # the full mannequin, when the project has one (UE 5.8's template does not)
+        fixtures.fresh_scene(cm=True)
+        full = import_unreal_file(pulled["SKM_Manny"]).armatures[0]
+        compare = {
+            "reference": pulled["SKM_Manny"]["asset_path"],
+            "skeleton": "SKEL_Manny",
+            "bones": [b.name for b in full.data.bones],
+        }
+        smoke.add(
+            "manny_full", 5, [smoke.export("manny_full", "mesh", [full])], {"compare_skeletal": {"SKM_Manny": compare}}
+        )
 
 
 CASES = (
@@ -440,6 +487,7 @@ CASES = (
     lambda smoke: case_animation(smoke, "anim_24fps", 24, 1, 24),
     case_vertex_colours,
     case_shading,
+    case_push_twice,
 )
 
 

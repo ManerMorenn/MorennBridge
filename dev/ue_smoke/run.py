@@ -68,7 +68,8 @@ def report(results_path):
         checks = [r for r in case["results"] if r["ok"] is not None]
         bad = [r for r in checks if not r["ok"]]
         failed += len(bad)
-        print(f"\n{case['name']} (checklist item {case['item']}): {len(checks) - len(bad)}/{len(checks)} ok")
+        item = f"checklist item {case['item']}" if isinstance(case["item"], int) else case["item"]
+        print(f"\n{case['name']} ({item}): {len(checks) - len(bad)}/{len(checks)} ok")
         for r in case["results"]:
             label = "note" if r["ok"] is None else ("ok  " if r["ok"] else "FAIL")
             shown = r["detail"] and (r["ok"] is not True or os.environ.get("MB_SMOKE_VERBOSE"))
