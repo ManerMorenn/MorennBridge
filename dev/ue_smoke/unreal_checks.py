@@ -206,13 +206,17 @@ def mesh_colours(mesh):
 
 
 def copy_to_dynamic_mesh(mesh):
-    """LOD0 of a static mesh, as imported (source model)."""
+    """LOD0 of a static or skeletal mesh, as imported (source model)."""
     options = unreal.GeometryScriptCopyMeshFromAssetOptions()
     lod = unreal.GeometryScriptMeshReadLOD()
     lod.set_editor_property("lod_type", unreal.GeometryScriptLODType.SOURCE_MODEL)
-    dynamic, _outcome = unreal.GeometryScript_AssetUtils.copy_mesh_from_static_mesh(
-        mesh, unreal.DynamicMesh(), options, lod
+    utils = unreal.GeometryScript_AssetUtils
+    copy = (
+        utils.copy_mesh_from_skeletal_mesh
+        if isinstance(mesh, unreal.SkeletalMesh)
+        else utils.copy_mesh_from_static_mesh
     )
+    dynamic, _outcome = copy(mesh, unreal.DynamicMesh(), options, lod)
     return dynamic
 
 
@@ -293,6 +297,9 @@ def compare_skeletal(case, name, exp):
         distance, at, angle, at_angle = pose_difference(pose, ref_pose, shared, use_reference_pose=True)
         case.check(distance < 0.01, f"{name}: rest positions", f"largest difference {distance:.5f} cm ({at})")
         case.check(angle < 0.01, f"{name}: rest rotations", f"largest difference {angle:.5f} deg ({at_angle})")
+    triangles = copy_to_dynamic_mesh(mesh).get_triangle_count()
+    ref_triangles = copy_to_dynamic_mesh(reference).get_triangle_count()
+    case.check(triangles == ref_triangles, f"{name}: LOD0 triangles", f"{triangles}, original {ref_triangles}")
     bounds, ref_bounds = mesh.get_imported_bounds(), reference.get_imported_bounds()
     got = vec(bounds.origin) + vec(bounds.box_extent)
     wanted = vec(ref_bounds.origin) + vec(ref_bounds.box_extent)

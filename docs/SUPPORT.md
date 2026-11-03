@@ -34,6 +34,8 @@ editor that speaks the same protocol.
   back plays them in their reference pose.
 - Animation settings that exist only on the Unreal asset (root motion, force root lock, retarget source) are not part
   of FBX. A pushed animation is a new asset without them; set them again in Unreal.
+- Skeletal mesh LODs are not exported. The LODs of a skeletal mesh imported from Unreal become LOD objects
+  (`SKM_Manny_LOD1` …) that the export leaves out; Unreal can generate LODs again.
 
 ## FAQ
 

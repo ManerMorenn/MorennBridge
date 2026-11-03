@@ -107,6 +107,8 @@ def run(results, out_dir, content_root, project):
         objects = {o.name: o.type for o in bpy.data.objects}
         results.check(objects.get("SM_Crâte") == "MESH", "pulled static mesh", sorted(objects))
         results.check(objects.get("SKM_Manny_Simple") == "ARMATURE", "pulled skeletal mesh", sorted(objects))
+        lods = [objects.get(f"SKM_Manny_Simple_LOD{i}") for i in (1, 2)]
+        results.check(lods == ["MESH", "MESH"], "skeletal LODs kept apart from LOD0", sorted(objects))
         actions = [a.name for a in bpy.data.actions]
         results.check("MF_Unarmed_Jog_Fwd" in actions, "pulled animation", actions)
 

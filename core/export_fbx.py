@@ -261,6 +261,8 @@ def _stage_skeletal_group(st, group, settings, node_names, report):
     node_names.append("Armature")
     targets = merge_targets_for(arm, exported)
     entry = {"node": group.asset_name, "name": group.asset_name, "meshes": 0, "bones": len(exported)}
+    if group.lods:
+        report.info(f"'{group.asset_name}': skeletal mesh LODs are not exported; Unreal can generate them")
     first = True
     for mesh in group.render:
         node = group.asset_name if first else f"{group.asset_name}_{naming.sanitize_asset_name(mesh.name)}"

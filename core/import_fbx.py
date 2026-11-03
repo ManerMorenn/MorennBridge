@@ -11,7 +11,7 @@ from .. import compat
 from ..fbxpatch import ascii as fbx_ascii
 from ..fbxpatch import inspect as I
 from ..fbxpatch import patches, tree
-from . import bones, naming, units
+from . import bones, classify, naming, units
 from .export_fbx import MARKER_AXES, MARKER_AXES_MAP
 
 
@@ -306,6 +306,16 @@ def _rename_actions(result, stem, report):
             report.info(f"Action renamed to '{action.name}'")
 
 
+def _lod_indices(info):
+    """``{node name: LOD index}`` for the children of the file's LOD groups (name suffix first, else child order)."""
+    out = {}
+    for _group, children in info.lod_groups:
+        for position, child in enumerate(children):
+            parsed = naming.parse_lod_name(child)
+            out[child] = parsed[1] if parsed else position
+    return out
+
+
 def _tidy(context, result, stem, report):
     info = result.info
     base_asset = naming.sanitize_asset_name(stem)
@@ -313,10 +323,19 @@ def _tidy(context, result, stem, report):
     if result.armatures:
         arm = result.armatures[0]
         skinned = [m for m in result.meshes if any(md.type == "ARMATURE" and md.object == arm for md in m.modifiers)]
-        for i, mesh in enumerate(skinned):  # meshes first: the UE mesh node carries the asset name
+        lod_index = _lod_indices(info)
+        meshes = [m for m in skinned if lod_index.get(naming.strip_numeric_suffix(m.name), 0) == 0]
+        lods = [(lod_index[naming.strip_numeric_suffix(m.name)], m) for m in skinned if m not in meshes]
+        for i, mesh in enumerate(meshes):  # meshes first: the UE mesh node carries the asset name
             mesh.name = f"{base_asset}_Mesh" if i == 0 else f"{base_asset}_Mesh_{i}"
             mesh.data.name = mesh.name
             mesh.morenn.export_name = naming.strip_known_prefix(base_asset, ["SM_", "SKM_", "SK_"])[0]
+        for index, mesh in sorted(lods, key=lambda pair: pair[0]):
+            mesh.name = mesh.data.name = f"{base_asset}_LOD{index}"
+            mesh.morenn.role, mesh.morenn.lod_index = "LOD", index
+            mesh.morenn.lod_of = meshes[0] if meshes else None
+        if lods:
+            report.info(f"'{base_asset}': LOD{'/'.join(str(i) for i, _ in sorted(lods))} kept as LOD objects")
         if arm.name != base_asset:
             arm.name = base_asset
             arm.data.name = base_asset
@@ -325,12 +344,12 @@ def _tidy(context, result, stem, report):
         if obj.type == "EMPTY" and not obj.children and not naming.is_socket_name(obj.name):
             bpy.data.objects.remove(obj, do_unlink=True)
             result.objects.remove(obj)
-    # LOD groups exported by Unreal: empty <Name> with <Name>_LOD<i> children
+    # static LOD groups exported by Unreal: empty <Name> with <Name>_LOD<i> children (skinned LODs are done above)
     by_name = {o.name: o for o in result.objects}
     for group_name, children in info.lod_groups:
         group = by_name.get(group_name)
         lod_objs = [(naming.parse_lod_name(c), by_name.get(c)) for c in children]
-        lod_objs = [(p[1], o) for p, o in lod_objs if p and o is not None]
+        lod_objs = [(p[1], o) for p, o in lod_objs if p and o is not None and not classify.armature_of(o)]
         if not lod_objs:
             continue
         lod_objs.sort(key=lambda t: t[0])
