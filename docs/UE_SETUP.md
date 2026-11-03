@@ -14,21 +14,19 @@ manifest records where MorennBridge expects the asset.
 ## 2. Push to Unreal: UE 5.8 project settings for remote execution
 1. **Plugins**: enable *Python Editor Script Plugin* (it is loaded anyway by Niagara / RigVM) and
    *Editor Scripting Utilities*. Restart the editor.
-2. **Edit → Project Settings → Plugins → Python**:
-    - *Enable Remote Execution*: **on**
+2. **Edit → Project Settings → Plugins → Python**, section *Python Remote Execution*: *Enable Remote Execution?*
+   **on**. It is a project setting, not one of the Editor Preferences where Python's *Developer Mode* is. The
+   advanced settings of the section keep their defaults, which match the add-on:
     - *Multicast Group Endpoint*: `239.0.0.1:6766`
-    - *Multicast Bind Address*: `0.0.0.0` on macOS/Linux (`127.0.0.1` sometimes does not receive multicast there);
-      `127.0.0.1` is fine on Windows
-    - *Multicast TTL*: `0` (same machine only)
+    - *Multicast Bind Address*: `127.0.0.1`. On macOS/Linux this address sometimes does not receive multicast: set
+      `0.0.0.0` when *Find Unreal* finds nothing
+    - *Multicast Time-To-Live*: `0` (same machine only)
 
-    Equivalent `Config/DefaultEngine.ini` block:
+    The editor writes the setting to `Config/DefaultEngine.ini`:
 
     ```ini
     [/Script/PythonScriptPlugin.PythonScriptPluginSettings]
     bRemoteExecution=True
-    RemoteExecutionMulticastGroupEndpoint=239.0.0.1:6766
-    RemoteExecutionMulticastBindAddress=0.0.0.0
-    RemoteExecutionMulticastTtl=0
     ```
 
 3. **Firewall**: allow the editor to accept local connections (the bridge only uses loopback traffic).

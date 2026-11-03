@@ -150,11 +150,11 @@ flip the convention of a whole rig later (**Convert Bone Axes**) and override th
 
 <img src="images/08_unreal_link.png" width="280" alt="Unreal Link panel">
 
-With Python remote execution enabled in the Unreal project (`UE_SETUP.md`, two settings), **Find Unreal** lists the
-running editors. **Push Last Export to Unreal** imports the last manifest with the correct Interchange (or legacy)
-settings, renames the skeleton and physics asset with your prefixes, links the generated collision mesh as Complex
-Collision Mesh and saves. **Pull Selected Assets from Unreal** exports the assets selected in Unreal's Content
-Browser and imports them here. Blender's *Allow Online Access* preference must be on.
+With Python remote execution enabled in the Unreal project (one project setting, see `UE_SETUP.md`), **Find
+Unreal** lists the running editors. **Push Last Export to Unreal** imports the last manifest with the correct
+Interchange (or legacy) settings, renames the skeleton and physics asset with your prefixes, links the generated
+collision mesh as Complex Collision Mesh and saves. **Pull Selected Assets from Unreal** exports the assets selected
+in Unreal's Content Browser and imports them here. Blender's *Allow Online Access* preference must be on.
 
 FBX has no place for the settings of an Unreal animation asset (root motion, root lock, retarget source, rate
 scale, looping, additive settings). Pull stores them on the Blender action, and pushing that action sets them on
