@@ -92,7 +92,7 @@ class UnrealScriptCase(unittest.TestCase):
         return report, path
 
     def assert_no_property_warnings(self):
-        problems = [m for m in U.messages("Warning") if "not found" in m or "Property" in m]
+        problems = [m for m in U.messages("Warning") if "not found" in m or "Could not set" in m]
         self.assertEqual(problems, [])
 
     def pipeline(self, index=-1):
@@ -221,6 +221,22 @@ class InterchangeImportTests(UnrealScriptCase):
         self.assertEqual(report["items"][0]["renamed"], [])
         self.assertEqual(report["items"][0]["skeleton"], "/Game/MB/SKM_Hero_Skeleton")
         self.assertEqual(U.STATE.saved, [])
+
+    def test_frame_alignment_and_sample_rate_follow_the_manifest(self):
+        for option, expected in (
+            ("SNAP_TO_CLOSEST", U.InterchangeFrameAlignment.SNAP_TO_CLOSEST),
+            ("NONE", U.InterchangeFrameAlignment.NONE),
+        ):
+            with self.subTest(option=option):
+                U.reset()
+                anim = self.item("ANIMATION", "A_Hero_Run", fps=30000 / 1001)
+                U.plan_import(anim["path"], [("AnimSequence", "A_Hero_Run")])
+                report, _ = self.import_manifest([anim], frame_alignment=option)
+                self.assertTrue(report["ok"])
+                animation = self.pipeline().get_editor_property("animation_pipeline")
+                self.assertIs(animation.get_editor_property("frame_alignment"), expected)
+                self.assertEqual(animation.get_editor_property("custom_bone_animation_sample_rate"), 30)
+                self.assert_no_property_warnings()
 
     def test_failed_import_is_reported(self):
         item = self.item("STATIC_MESH", "SM_Crate")
@@ -368,6 +384,26 @@ class CommonHelperTests(UnrealScriptCase):
         self.assertTrue(any("no_such_name" in m for m in U.messages("Warning")))
         self.assertFalse(C.setp(options, "other_missing", True, optional=True))
         self.assertIsNone(C.getp(options, "other_missing"))
+
+    def test_setp_says_why_a_value_was_refused(self):
+        C = self.load("mb_ue_common")
+        options = U.FbxExportOption()
+        self.assertFalse(C.setp(options, "fbx_export_compatibility", U.FBXImportType.FBXIT_ANIMATION))
+        self.assertTrue(any("Failed to convert type 'FBXImportType'" in m for m in U.messages("Warning")))
+
+    def test_missing_enum_values_are_not_silent(self):
+        C = self.load("mb_ue_common")
+        self.assertIsNone(C.enum_value("InterchangeAnimationFrameAlignment", "SNAP_TO_CLOSEST"))
+        self.assertIsNone(C.enum_value("InterchangeFrameAlignment", "SNAP_SOMEWHERE"))
+        warnings = U.messages("Warning")
+        self.assertTrue(any("InterchangeAnimationFrameAlignment.SNAP_TO_CLOSEST not found" in m for m in warnings))
+        self.assertTrue(any("InterchangeFrameAlignment.SNAP_SOMEWHERE not found" in m for m in warnings))
+        self.assertIsNone(C.enum_value("NoSuchEnum", "X", optional=True))
+        self.assertEqual(len(U.messages("Warning")), 2)
+        self.assertIs(
+            C.enum_value("InterchangeFrameAlignment", "SNAP_TO_CLOSEST_FRAME_BOUNDARY", "SNAP_TO_CLOSEST"),
+            U.InterchangeFrameAlignment.SNAP_TO_CLOSEST,
+        )
 
     def test_result_file_problems_are_warnings(self):
         C = self.load("mb_ue_common")

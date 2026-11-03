@@ -39,14 +39,15 @@ def last_result_json():
 
 def setp(obj, name, value, alternatives=(), optional=False):
     """``obj.set_editor_property`` with fallbacks; returns True when a property was set."""
+    error = None
     for candidate in (name, *alternatives):
         try:
             obj.set_editor_property(candidate, value)
             return True
-        except Exception:
-            continue
+        except Exception as exc:
+            error = exc
     if not optional:
-        warn(f"Property '{name}' not found on {type(obj).__name__}; left at its default")
+        warn(f"Could not set '{name}' on {type(obj).__name__}, left at its default: {error}")
     return False
 
 
@@ -57,14 +58,15 @@ def getp(obj, name, default=None):
         return default
 
 
-def enum_value(enum_name, *member_names):
+def enum_value(enum_name, *member_names, optional=False):
+    """First existing member of ``unreal.<enum_name>``; warns (unless optional) when there is none."""
     enum_cls = getattr(unreal, enum_name, None)
-    if enum_cls is None:
-        return None
-    for member in member_names:
+    for member in member_names if enum_cls is not None else ():
         value = getattr(enum_cls, member, None)
         if value is not None:
             return value
+    if not optional:
+        warn(f"Enum value {enum_name}.{'/'.join(member_names)} not found; setting left at its default")
     return None
 
 

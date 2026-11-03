@@ -89,7 +89,7 @@ def build_interchange_pipeline(item, options):
             C.setp(ap, "animation_range", rng)
         fps = float(item.get("fps", 0) or 0)
         if fps > 0:
-            C.setp(ap, "custom_bone_animation_sample_rate", fps, optional=True)
+            C.setp(ap, "custom_bone_animation_sample_rate", int(round(fps)), optional=True)
         C.setp(
             ap,
             "use30_hz_to_bake_bone_animation",
@@ -97,10 +97,10 @@ def build_interchange_pipeline(item, options):
             alternatives=("use_30hz_to_bake_bone_animation",),
             optional=True,
         )
-        if options.get("frame_alignment") == "SNAP_TO_CLOSEST":
-            fa = C.enum_value("InterchangeAnimationFrameAlignment", "SNAP_TO_CLOSEST_FRAME_BOUNDARY", "SNAP_TO_CLOSEST")
-            if fa is not None:
-                C.setp(ap, "frame_alignment", fa, optional=True)
+        snap = options.get("frame_alignment") == "SNAP_TO_CLOSEST"
+        fa = C.enum_value("InterchangeFrameAlignment", "SNAP_TO_CLOSEST" if snap else "NONE")
+        if fa is not None:
+            C.setp(ap, "frame_alignment", fa)
         C.setp(ap, "import_custom_attribute", True, optional=True)
         C.setp(ap, "remove_curve_redundant_keys", False, optional=True)
 
