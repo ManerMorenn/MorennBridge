@@ -157,7 +157,8 @@ Collision Mesh and saves. **Pull Selected Assets from Unreal** exports the asset
 Browser and imports them here. Blender's *Allow Online Access* preference must be on.
 
 *Push to Unreal after export* needs an editor in the list, so press **Find Unreal** first; otherwise the Log says the
-push was skipped. Blender stays busy while Unreal imports.
+push was skipped. Blender stays usable while Unreal imports: the panel shows the status, and the Log gets the
+result when Unreal answers. Push and Pull are greyed out until then.
 
 This part has not been run against a live editor yet. Property names on the Unreal side that do not exist in a
 given engine version are skipped and logged.

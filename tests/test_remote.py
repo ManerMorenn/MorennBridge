@@ -29,6 +29,7 @@ class FakeUnrealNode(threading.Thread):
         self.commands = []
         self.success = True
         self.output = [{"type": "Info", "output": "hello from fake UE"}]
+        self.delay = 0.0
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if hasattr(socket, "SO_REUSEPORT"):
@@ -117,6 +118,7 @@ class FakeUnrealNode(threading.Thread):
             "data": result,
         }
         payload = json.dumps(reply, separators=(",", ":")).encode()
+        time.sleep(self.delay)
         # fragment the answer to exercise reassembly
         self.tcp.sendall(payload[:10])
         time.sleep(0.05)
@@ -197,6 +199,7 @@ class UnrealOperatorTests(unittest.TestCase):
         self.scene = fixtures.fresh_scene(cm=True)
         self.tmp = fixtures.temp_dir()
         self.scene.morenn.export_dir = self.tmp
+        self.scene.morenn.push_after_export = False
         self.ue_ops = fixtures.addon_module("ops.ue_ops")
         self.rt = bpy.context.window_manager.morenn_rt
         self.rt.ue_nodes.clear()
@@ -303,6 +306,58 @@ class UnrealOperatorTests(unittest.TestCase):
         with mock.patch.object(remote.RemoteSession, "connect", side_effect=remote.RemoteError("no answer")):
             self.assertEqual(fixtures.call(bpy.ops.morenn.ue_push), {"CANCELLED"})
         self.assertIn("no answer", fixtures.log_text())
+        self.assertEqual(self.rt.ue_status, "Failed")
+
+    def modal_state(self, operator):
+        """Stand-in for a running modal operator instance (bpy operators cannot be created directly)."""
+        state = types.SimpleNamespace(manifest="", report=mock.Mock(), _timer=None)
+        state.cancel = lambda context: operator.cancel(state, context)
+        state.finish = lambda context, job: operator.finish(state, context, job)
+        return state
+
+    def test_push_waits_in_a_thread_and_finishes_on_the_main_thread(self):
+        self.start_fake_editor()
+        self.fake.delay = 0.5
+        self.export_cube()
+        push = self.ue_ops.MORENN_OT_ue_push
+        state = self.modal_state(push)
+        state._job = push.start_job(state, bpy.context)
+        self.assertTrue(self.ue_ops.busy())
+        self.assertFalse(bpy.ops.morenn.ue_push.poll())
+        self.assertEqual(self.rt.ue_status, "Importing in FakeProject…")
+        timer = types.SimpleNamespace(type="TIMER")
+        self.assertEqual(push.modal(state, bpy.context, timer), {"PASS_THROUGH"})
+        state._job.wait()
+        self.assertEqual(push.modal(state, bpy.context, types.SimpleNamespace(type="MOUSEMOVE")), {"PASS_THROUGH"})
+        self.assertEqual(push.modal(state, bpy.context, timer), {"FINISHED"})
+        self.assertFalse(self.ue_ops.busy())
+        self.assertEqual(self.rt.ue_status, "Done")
+        self.assertIn("mb_ue_import.py", self.fake.commands[-1]["command"])
+
+    def test_push_without_a_window_waits_for_the_editor(self):
+        self.start_fake_editor()
+        self.export_cube()
+        self.assertEqual(bpy.ops.morenn.ue_push("INVOKE_DEFAULT"), {"FINISHED"})
+        self.assertEqual(len(self.fake.commands), 1)
+
+    def test_cancel_removes_the_timer(self):
+        wm = bpy.context.window_manager
+        state = self.modal_state(self.ue_ops.MORENN_OT_ue_push)
+        state._timer = wm.event_timer_add(10.0, window=wm.windows[0])
+        self.ue_ops.MORENN_OT_ue_push.cancel(state, bpy.context)
+        self.assertIsNone(state._timer)
+
+    def test_export_does_not_start_a_second_push(self):
+        self.start_fake_editor()
+        self.fake.delay = 0.5
+        self.export_cube()
+        state = self.modal_state(self.ue_ops.MORENN_OT_ue_push)
+        job = self.ue_ops.MORENN_OT_ue_push.start_job(state, bpy.context)
+        self.scene.morenn.push_after_export = True
+        fixtures.call(bpy.ops.morenn.export_ue)
+        job.wait()
+        self.assertIn("Not pushed to Unreal: the previous push is still running", fixtures.log_text())
+        self.assertEqual(len(self.fake.commands), 1)
 
     def test_push_needs_a_manifest_and_an_editor(self):
         self.assertFalse(bpy.ops.morenn.ue_push.poll())

@@ -8,6 +8,7 @@ from bpy.props import BoolProperty, EnumProperty
 from ..core import classify, export_fbx, naming, validate
 from ..core.log import Report, describe_error
 from ..prefs import get_prefs
+from . import ue_ops
 
 MODE_ITEMS = [
     ("AUTO", "Auto", "Skinned meshes and armatures become skeletal meshes, everything else static meshes"),
@@ -128,10 +129,13 @@ class MORENN_OT_export_ue(bpy.types.Operator):
         if push and not len(context.window_manager.morenn_rt.ue_nodes):
             report.warning("Not pushed to Unreal: no editor found yet, use Find Unreal in the Unreal Link panel")
             push = False
+        elif push and ue_ops.busy():
+            report.warning("Not pushed to Unreal: the previous push is still running")
+            push = False
         report.flush(scene, self)
         if push:
             try:
-                bpy.ops.morenn.ue_push()
+                bpy.ops.morenn.ue_push("INVOKE_DEFAULT")
             except RuntimeError as exc:
                 self.report({"ERROR"}, f"Push to Unreal failed: {describe_error(exc)}")
         return {"FINISHED"} if done else {"CANCELLED"}

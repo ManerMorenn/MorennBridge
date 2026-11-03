@@ -29,7 +29,6 @@ editor that speaks the same protocol.
 - Convert Scene does not rescale particle sizes, driver expressions or plain numbers in Geometry Nodes inputs. It
   warns about them. Inputs declared as distances are scaled.
 - Convert Bone Axes clears the *Connected* flag, because tails move. Euler-keyed bones become quaternion bones.
-- Push to Unreal keeps Blender busy until Unreal has finished importing.
 
 ## FAQ
 
