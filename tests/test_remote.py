@@ -308,6 +308,24 @@ class UnrealOperatorTests(unittest.TestCase):
         self.assertIn("no answer", fixtures.log_text())
         self.assertEqual(self.rt.ue_status, "Failed")
 
+    def test_any_error_in_the_worker_thread_is_reported(self):
+        self.start_fake_editor()
+        self.export_cube()
+        remote = fixtures.addon_module("ue.remote")
+        for operator in (bpy.ops.morenn.ue_push, bpy.ops.morenn.ue_pull):
+            with self.subTest(operator=operator.idname()):
+                self.scene.morenn.log.clear()
+                with mock.patch.object(remote.RemoteSession, "run_file", side_effect=KeyError("command")):
+                    self.assertEqual(fixtures.call(operator), {"CANCELLED"})
+                self.assertIn("Unreal Link failed: unexpected KeyError", fixtures.log_text())
+                self.assertEqual(self.rt.ue_status, "Failed")
+        push = self.ue_ops.MORENN_OT_ue_push
+        state = self.modal_state(push)
+        state._report = fixtures.addon_module("core.log").Report("Push to Unreal")
+        silent = types.SimpleNamespace(error=None, result=None)
+        self.assertEqual(push.finish(state, bpy.context, silent), {"CANCELLED"})
+        self.assertIn("No answer from Unreal", fixtures.log_text())
+
     def modal_state(self, operator):
         """Stand-in for a running modal operator instance (bpy operators cannot be created directly)."""
         state = types.SimpleNamespace(manifest="", report=mock.Mock(), _timer=None)

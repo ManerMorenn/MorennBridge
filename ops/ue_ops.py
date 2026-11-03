@@ -40,7 +40,7 @@ class RemoteJob:
             with remote.RemoteSession(*self.settings) as session:
                 session.connect(self.node, timeout=5.0)
                 self.result = session.run_file(*self.command, timeout=self.timeout)
-        except (remote.RemoteError, OSError) as exc:
+        except Exception as exc:  # reported by finish() on the main thread
             self.error = exc
 
     def start(self):
@@ -207,9 +207,15 @@ def _editor_output(result, report):
 
 
 def _connection_failed(operator, context, job):
-    if job.error is None:
+    error = job.error
+    if error is None and job.result is not None:
         return False
-    operator._report.error(str(job.error))
+    if error is None:
+        operator._report.error("No answer from Unreal")
+    elif isinstance(error, (remote.RemoteError, OSError)):
+        operator._report.error(str(error))
+    else:
+        operator._report.error(f"Unreal Link failed: {describe_error(error)}")
     _set_status(context, "Failed")
     operator._report.flush(context.scene, operator)
     return True
