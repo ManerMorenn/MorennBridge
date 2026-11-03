@@ -276,7 +276,24 @@ def import_legacy(item, options):
     task.set_editor_property("options", ui)
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
     paths = list(dict.fromkeys(p.split(".")[0] for p in task.get_editor_property("imported_object_paths")))
-    return bool(paths), paths
+    return bool(paths), paths + unlisted_links(paths, item)
+
+
+def unlisted_links(paths, item):
+    """Skeleton and physics asset made for an imported skeletal mesh, which the legacy importer does not list."""
+    folder = item["destination_path"].rstrip("/")
+    found = []
+    for path in paths:
+        mesh = C.load(path)
+        if mesh is None or mesh.get_class().get_name() != "SkeletalMesh":
+            continue
+        for prop in ("skeleton", "physics_asset"):
+            linked = C.getp(mesh, prop)
+            linked_path = C.asset_path(linked) if linked is not None else None
+            made_here = linked_path and linked_path.rsplit("/", 1)[0] == folder and linked_path != item.get("skeleton")
+            if made_here and linked_path not in paths + found:
+                found.append(linked_path)
+    return found
 
 
 # ---------------------------------------------------------------------- post-processing

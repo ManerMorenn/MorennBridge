@@ -243,7 +243,7 @@ class StaticMesh(Object):
 
 
 class SkeletalMesh(Object):
-    _props = {"skeleton": Prop(Skeleton, None, read_only=True)}
+    _props = {"skeleton": Prop(Skeleton, None, read_only=True), "physics_asset": Prop(PhysicsAsset, None)}
 
 
 class AnimSequence(Object):
@@ -352,7 +352,11 @@ def _create_planned_assets(filename, destination_path):
     planned = STATE.plan.get(os.path.normcase(os.path.abspath(filename)))
     if planned is None:
         return None
-    return [add_asset(class_name, f"{destination_path.rstrip('/')}/{name}") for class_name, name in planned]
+    created = [add_asset(class_name, f"{destination_path.rstrip('/')}/{name}") for class_name, name in planned]
+    for mesh in (a for a in created if isinstance(a, SkeletalMesh)):  # the mesh links what was made for it
+        for prop, cls in (("skeleton", Skeleton), ("physics_asset", PhysicsAsset)):
+            mesh._values[prop] = next((a for a in created if isinstance(a, cls)), mesh._values[prop])
+    return created
 
 
 def plan_import(filename, assets):
@@ -642,7 +646,8 @@ class AssetTools(Object):
             created = _create_planned_assets(
                 task.get_editor_property("filename"), task.get_editor_property("destination_path")
             )
-            paths = [a.get_path_name() for a in created or []]
+            # like UE 5.8: the skeleton and physics asset made for a skeletal mesh are not listed
+            paths = [a.get_path_name() for a in created or [] if not isinstance(a, (Skeleton, PhysicsAsset))]
             task.set_editor_property("imported_object_paths", paths)
 
 

@@ -425,10 +425,22 @@ class LegacyImportTests(UnrealScriptCase):
     def test_skeletal_mesh_and_animation_tasks(self):
         mesh = self.item("SKELETAL_MESH", "SKM_Hero", source_armature="Hero")
         anim = self.item("ANIMATION", "A_Hero_Run", source_armature="Hero", fps=24)
-        U.plan_import(mesh["path"], [("SkeletalMesh", "SKM_Hero"), ("Skeleton", "SKM_Hero_Skeleton")])
+        made = [
+            ("SkeletalMesh", "SKM_Hero"),
+            ("Skeleton", "SKM_Hero_Skeleton"),
+            ("PhysicsAsset", "SKM_Hero_PhysicsAsset"),
+        ]
+        U.plan_import(mesh["path"], made)
         U.plan_import(anim["path"], [("AnimSequence", "A_Hero_Run")])
         report, _ = self.import_manifest([mesh, anim], importer="LEGACY")
         self.assertTrue(report["ok"])
+        # the legacy importer lists only the mesh; its skeleton and physics asset are found through it
+        self.assertEqual(
+            report["items"][0]["imported"], ["/Game/MB/SKM_Hero", "/Game/MB/SKEL_Hero", "/Game/MB/PHYS_Hero"]
+        )
+        self.assertIs(
+            U.load_asset("/Game/MB/SKM_Hero").get_editor_property("skeleton"), U.load_asset("/Game/MB/SKEL_Hero")
+        )
         mesh_ui = U.STATE.imports[0]["task"].get_editor_property("options")
         self.assertTrue(mesh_ui.get_editor_property("import_as_skeletal"))
         skeletal = mesh_ui.get_editor_property("skeletal_mesh_import_data")
