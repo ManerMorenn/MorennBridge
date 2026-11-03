@@ -44,13 +44,14 @@ While remote execution is on, any program on this machine can run Python in the 
 turn the setting off on shared machines.
 
 ## 3. Legacy FBX importer (optional)
-UE 5.8 imports FBX through Interchange. To use the legacy importer instead, add to `DefaultEngine.ini`:
+UE 5.8 imports FBX through Interchange. To target the legacy importer, set *UE importer = Legacy* in the
+MorennBridge preferences (LOD groups are then written as real FBX LodGroup nodes, several meshes per file are not
+supported, generated collision meshes go to separate files). A push then uses the legacy importer by itself. For
+files you drag into the Content Browser, also add to `DefaultEngine.ini`:
 ```ini
 [ConsoleVariables]
 Interchange.FeatureFlags.Import.FBX=0
 ```
-and set *UE importer = Legacy* in the MorennBridge preferences (LOD groups are then written as real FBX
-LodGroup nodes, several meshes per file are not supported, generated collision meshes go to separate files).
 
 ## 4. Troubleshooting
 - **Extra `Armature` root bone**: the file was exported without the post-pass (or with *Strip armature null node*

@@ -29,6 +29,11 @@ editor that speaks the same protocol.
 - Convert Scene does not rescale particle sizes, driver expressions or plain numbers in Geometry Nodes inputs. It
   warns about them. Inputs declared as distances are scaled.
 - Convert Bone Axes clears the *Connected* flag, because tails move. Euler-keyed bones become quaternion bones.
+- Pull: Unreal writes an animation with the bones of its skeleton's preview mesh only. Bones that only the
+  skeleton has (correctives and attachment bones of a shared skeleton) are not in the file, so an animation pushed
+  back plays them in their reference pose.
+- Animation settings that exist only on the Unreal asset (root motion, force root lock, retarget source) are not part
+  of FBX. A pushed animation is a new asset without them; set them again in Unreal.
 
 ## FAQ
 

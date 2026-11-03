@@ -6,6 +6,7 @@ See the [user guide](USER_GUIDE.md) for the panel-by-panel walkthrough.
 - Blender scene: **1 unit = 1 cm** (Scene panel → *Set Up Scene for Unreal*). Metre scenes still export correctly (data is rescaled while staging) but importing UE files into a metre scene needs a rescale, so work in centimetres.
 - Exported files are written in Unreal's own axis convention (Z-up, front −Y, right-handed, centimetres). Unreal does not rotate or rescale anything on import. A model facing −Y in Blender (visible in *Front* view) faces +Y in Unreal, the same orientation as Epic's `SKM_Manny`.
 - Every exported file carries `MorennBridge|BoneAxes` in its FBX global settings so the importer knows which bone convention was used.
+- Vertex colours are written in sRGB (*Vertex colors* preference). Both Unreal importers store the same 8-bit values Blender shows: exactly for byte colour attributes, within one step for float ones (Unreal truncates).
 
 ## Names
 | Thing | Blender | FBX node / UE asset |
