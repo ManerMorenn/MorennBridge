@@ -19,12 +19,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "ue", "scripts"))
 mb_import = importlib.import_module("mb_ue_import")
 mb_export = importlib.import_module("mb_ue_export")
+common = mb_import.C
 
 LIB = unreal.EditorAssetLibrary
 POSE = unreal.AnimPoseExtensions
 WORLD = unreal.AnimPoseSpaces.WORLD
 LOCAL = unreal.AnimPoseSpaces.LOCAL
-ASSET_ONLY_SETTINGS = ("retarget_source_asset", "retarget_source", "enable_root_motion", "force_root_lock")
 MANNEQUIN = (
     "/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple",
     "/Game/Characters/Mannequins/Anims/Unarmed/MM_Idle",
@@ -322,13 +322,10 @@ def compare_animation(case, name, exp):
     case.check(keys == ref_keys, f"{name}: keys", f"{keys}, original {ref_keys}")
     length, ref_length = anim.get_play_length(), reference.get_play_length()
     case.check(abs(length - ref_length) < 1e-4, f"{name}: length", f"{length:.5f} s, original {ref_length:.5f}")
-    lost = {}
-    for setting in ASSET_ONLY_SETTINGS:  # not in FBX: copied here (not saved) so poses compare like for like
-        value = reference.get_editor_property(setting)
-        if anim.get_editor_property(setting) != value:
-            lost[setting] = value.get_name() if hasattr(value, "get_name") else value
-            anim.set_editor_property(setting, value)
-    case.note(f"{name}: Unreal asset settings the round trip loses", lost or "none")
+    settings = common.read_settings(anim, common.ANIM_SETTINGS)
+    wanted = common.read_settings(reference, common.ANIM_SETTINGS)
+    differ = {k: f"{settings.get(k)}, original {v}" for k, v in wanted.items() if settings.get(k) != v}
+    case.check(not differ, f"{name}: Unreal-only settings (pulled, pushed back)", differ or f"{len(wanted)} equal")
     options = unreal.AnimPoseEvaluationOptions()
     # Unreal's FBX export holds the preview mesh's bones only; the others cannot come back
     bones = [str(n) for n in unreal.AnimationLibrary.get_animation_track_names(anim)]

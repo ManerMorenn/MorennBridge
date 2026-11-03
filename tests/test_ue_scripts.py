@@ -242,6 +242,53 @@ class InterchangeImportTests(UnrealScriptCase):
         )
         self.assert_no_property_warnings()
 
+    def test_pulled_animation_settings_are_set_again(self):
+        source = U.add_asset("SkeletalMesh", "/Game/Characters/SKM_Hero")
+        U.add_asset("Skeleton", "/Game/Characters/SKEL_Hero")
+        settings = {
+            "enable_root_motion": True,
+            "root_motion_root_lock": "ANIM_FIRST_FRAME",
+            "force_root_lock": True,
+            "retarget_source": "None",
+            "retarget_source_asset": "/Game/Characters/SKM_Hero",
+            "rate_scale": 0.5,
+            "interpolation": "STEP",
+            "ref_pose_seq": None,
+        }
+        anim = self.item("ANIMATION", "A_Hero_Jog", skeleton="/Game/Characters/SKEL_Hero", fps=30, ue_settings=settings)
+        U.plan_import(anim["path"], [("AnimSequence", "A_Hero_Jog")])
+        report, _ = self.import_manifest([anim])
+        self.assertTrue(report["ok"], report)
+        result = report["items"][0]
+        self.assertEqual(sorted(result["settings"]), sorted(settings))
+        self.assertEqual(result["warnings"], [])
+        asset = U.load_asset("/Game/MB/A_Hero_Jog")
+        self.assertTrue(asset.get_editor_property("enable_root_motion"))
+        self.assertTrue(asset.get_editor_property("force_root_lock"))
+        self.assertIs(asset.get_editor_property("root_motion_root_lock"), U.RootMotionRootLock.ANIM_FIRST_FRAME)
+        self.assertIs(asset.get_editor_property("retarget_source_asset"), source)
+        self.assertIs(asset.get_editor_property("interpolation"), U.AnimInterpolationType.STEP)
+        self.assertEqual(asset.get_editor_property("rate_scale"), 0.5)
+        self.assertIn("/Game/MB/A_Hero_Jog", U.STATE.saved)
+
+    def test_settings_that_cannot_be_set_again_are_warnings(self):
+        settings = {
+            "enable_root_motion": True,
+            "root_motion_root_lock": "NO_SUCH_LOCK",
+            "retarget_source_asset": "/Game/Gone/SKM_Old",
+            "rate_scale": "fast",
+        }
+        anim = self.item("ANIMATION", "A_Hero_Jog", fps=30, ue_settings=settings)
+        U.plan_import(anim["path"], [("AnimSequence", "A_Hero_Jog")])
+        report, _ = self.import_manifest([anim])
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["items"][0]["settings"], ["enable_root_motion"])
+        self.assertEqual(
+            report["items"][0]["warnings"],
+            ["A_Hero_Jog: settings not restored: root_motion_root_lock, retarget_source_asset, rate_scale"],
+        )
+        self.assertTrue(U.load_asset("/Game/MB/A_Hero_Jog").get_editor_property("enable_root_motion"))
+
     def test_generated_collision_mesh_becomes_the_complex_collision(self):
         assets = [
             {"node": "SM_Rock", "name": "SM_Rock", "collision_mesh": "SM_Rock_COLL", "collision_ratio": 0.1},
@@ -467,6 +514,26 @@ class ExportScriptTests(UnrealScriptCase):
         self.assertTrue(options.get_editor_property("collision"))
         self.assert_no_property_warnings()
 
+    def test_unreal_only_animation_settings_are_recorded(self):
+        mesh = U.add_asset("SkeletalMesh", "/Game/Characters/SKM_Hero")
+        anim = U.add_asset("AnimSequence", "/Game/MB/A_Hero_Jog")
+        anim.set_editor_property("enable_root_motion", True)
+        anim.set_editor_property("root_motion_root_lock", U.RootMotionRootLock.ANIM_FIRST_FRAME)
+        anim.set_editor_property("retarget_source_asset", mesh)
+        anim.set_editor_property("rate_scale", 1.5)
+        with mock.patch.dict(U.AnimSequence._props):
+            del U.AnimSequence._props["use_normalized_root_motion_scale"]  # older engines lack some
+            report = self.load("mb_ue_export").run(self.tmp, ["/Game/MB/A_Hero_Jog"])
+        settings = report["items"][0]["settings"]
+        self.assertEqual(json.loads(json.dumps(settings)), settings)
+        self.assertTrue(settings["enable_root_motion"])
+        self.assertEqual(settings["root_motion_root_lock"], "ANIM_FIRST_FRAME")
+        self.assertEqual(settings["retarget_source_asset"], "/Game/Characters/SKM_Hero")
+        self.assertEqual(settings["retarget_source"], "None")
+        self.assertEqual(settings["rate_scale"], 1.5)
+        self.assertIsNone(settings["ref_pose_seq"])
+        self.assertNotIn("use_normalized_root_motion_scale", settings)
+
     def test_assets_given_by_path(self):
         U.add_asset("StaticMesh", "/Game/MB/SM_Crate")
         report = self.load("mb_ue_export").run(self.tmp, ["/Game/MB/SM_Crate", "/Game/MB/Missing"])
@@ -570,6 +637,32 @@ class ManifestContractTests(UnrealScriptCase):
             24,
         )
         self.assert_no_property_warnings()
+
+    def test_pulled_animation_settings_travel_with_the_push(self):
+        rig, _body = _animated_character()
+        rig.data.morenn.ue_skeleton_path = "/Game/Characters/SKEL_Hero"
+        pulled = {"enable_root_motion": True, "root_motion_root_lock": "ZERO", "retarget_source_asset": None}
+        rig.animation_data.action.morenn.ue_settings = json.dumps(pulled)
+        U.add_asset("Skeleton", "/Game/Characters/SKEL_Hero")
+        prefs = fixtures.addon_module("prefs").get_prefs()
+        settings = fixtures.export_settings(self.tmp)
+        groups = fixtures.addon_module("core.classify").build_anim_groups(
+            [rig], prefs, self.scene, destination=settings.destination_path
+        )
+        log = fixtures.addon_module("core.log").Report("test")
+        _done, manifest_path = fixtures.addon_module("core.export_fbx").export_groups(
+            bpy.context, groups, settings, log
+        )
+        with open(manifest_path, encoding="utf-8") as fh:
+            item = json.load(fh)["items"][0]
+        self.assertEqual(item["ue_settings"], pulled)
+        U.plan_import(item["path"], [("AnimSequence", "A_Hero_Run")])
+        result = self.load("mb_ue_import").run(manifest_path)
+        self.assertTrue(result["ok"], result)
+        anim = U.load_asset(f"{item['destination_path']}/A_Hero_Run")
+        self.assertTrue(anim.get_editor_property("enable_root_motion"))
+        self.assertIs(anim.get_editor_property("root_motion_root_lock"), U.RootMotionRootLock.ZERO)
+        self.assertEqual(result["items"][0]["warnings"], [])
 
 
 if __name__ == "__main__":

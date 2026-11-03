@@ -70,6 +70,62 @@ def enum_value(enum_name, *member_names, optional=False):
     return None
 
 
+# AnimSequence settings FBX cannot carry: Pull records them, Push sets them again. Kind: value, name, asset or enum.
+ANIM_SETTINGS = (
+    ("enable_root_motion", "value"),
+    ("root_motion_root_lock", "RootMotionRootLock"),
+    ("force_root_lock", "value"),
+    ("use_normalized_root_motion_scale", "value"),
+    ("retarget_source", "name"),
+    ("retarget_source_asset", "asset"),
+    ("rate_scale", "value"),
+    ("loop", "value"),
+    ("interpolation", "AnimInterpolationType"),
+    ("additive_anim_type", "AdditiveAnimationType"),
+    ("ref_pose_type", "AdditiveBasePoseType"),
+    ("ref_pose_seq", "asset"),
+    ("ref_frame_index", "value"),
+)
+
+
+def read_settings(asset, spec):
+    """JSON-ready values of the ``spec`` properties of ``asset`` (properties it does not have are left out)."""
+    out = {}
+    for name, kind in spec:
+        try:
+            value = asset.get_editor_property(name)
+        except Exception:
+            continue
+        if kind == "asset":
+            out[name] = asset_path(value) if value is not None else None
+        elif kind == "name":
+            out[name] = str(value)
+        elif kind == "value":
+            out[name] = value
+        else:
+            out[name] = value.name
+    return out
+
+
+def apply_settings(asset, values, spec):
+    """Set what ``read_settings`` recorded; returns ``(applied, failed)`` property names."""
+    applied, failed = [], []
+    for name, kind in spec:
+        if name not in values:
+            continue
+        value = values[name]
+        if kind == "asset" and value:
+            value = load(value)
+        elif kind not in ("asset", "name", "value"):
+            value = enum_value(kind, value, optional=True) if value else None
+        missing = value is None and (kind not in ("asset", "name", "value") or values[name])
+        if missing or not setp(asset, name, value, optional=True):
+            failed.append(name)
+        else:
+            applied.append(name)
+    return applied, failed
+
+
 def ensure_directory(content_path):
     lib = unreal.EditorAssetLibrary
     if not lib.does_directory_exist(content_path):

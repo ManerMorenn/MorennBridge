@@ -32,8 +32,9 @@ editor that speaks the same protocol.
 - Pull: Unreal writes an animation with the bones of its skeleton's preview mesh only. Bones that only the
   skeleton has (correctives and attachment bones of a shared skeleton) are not in the file, so an animation pushed
   back plays them in their reference pose.
-- Animation settings that exist only on the Unreal asset (root motion, force root lock, retarget source) are not part
-  of FBX. A pushed animation is a new asset without them; set them again in Unreal.
+- Animation settings that exist only on the Unreal asset (root motion, root lock, retarget source, rate scale,
+  looping, additive settings) are not part of FBX. Pull keeps them on the Blender action and a push of that action
+  sets them again, as they were when pulled. Animations made in Blender get Unreal's defaults.
 - Skeletal mesh LODs are not exported. The LODs of a skeletal mesh imported from Unreal become LOD objects
   (`SKM_Manny_LOD1` …) that the export leaves out; Unreal can generate LODs again.
 

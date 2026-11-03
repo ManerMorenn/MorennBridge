@@ -81,6 +81,7 @@ def export_asset(asset, out_dir):
     elif cls == "AnimSequence":
         skel = C.getp(asset, "skeleton")
         item["skeleton"] = C.asset_path(skel) if skel is not None else None
+        item["settings"] = C.read_settings(asset, C.ANIM_SETTINGS)
     return item
 
 

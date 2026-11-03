@@ -14,6 +14,7 @@ from unittest import mock
 import bpy
 
 from tests import fixtures
+from tests.test_export_anim import _animated_character
 from tests.test_export_skeletal import _rigged_character
 
 GROUP, PORT = "239.0.0.1", 6799  # a test port so a real editor is never disturbed
@@ -398,6 +399,38 @@ class UnrealOperatorTests(unittest.TestCase):
         self.assertIn("SM_Crate", bpy.data.objects)
         self.assertIn("UE could not export /Game/Broken: cannot export", fixtures.log_text())
         self.assertIn("mb_ue_export.py", self.fake.commands[-1]["command"])
+
+    def test_pull_keeps_the_unreal_animation_settings(self):
+        self.start_fake_editor()
+        rig, _body = _animated_character()
+        settings = fixtures.export_settings(self.tmp)
+        groups = fixtures.addon_module("core.classify").build_anim_groups([rig], self.prefs, self.scene)
+        report = fixtures.addon_module("core.log").Report("test")
+        done, _manifest = fixtures.addon_module("core.export_fbx").export_groups(bpy.context, groups, settings, report)
+        fixtures.fresh_scene(cm=True)
+        self.scene.morenn.export_dir = self.tmp
+        out = os.path.join(self.tmp, "from_unreal")
+        os.makedirs(out)
+        jog = {"enable_root_motion": True, "retarget_source_asset": "/Game/Characters/SKM_Hero"}
+        item = {"file": done[0].path, "success": True, "skeleton": "/Game/SKEL_Hero", "settings": jog}
+        with open(os.path.join(out, "pull.result.json"), "w", encoding="utf-8") as fh:
+            json.dump({"items": [item]}, fh)
+        fixtures.call(bpy.ops.morenn.ue_pull)
+        self.assertEqual(json.loads(bpy.data.actions["A_Hero_Run"].morenn.ue_settings), jog)
+        self.assertIn("Unreal animation settings kept on A_Hero_Run for the next push", fixtures.log_text())
+
+    def test_push_lists_the_animation_settings_set_again(self):
+        self.start_fake_editor()
+        manifest = self.export_cube()
+        item = {"file": "A_Hero_Jog.fbx", "success": True, "imported": ["/Game/A_Hero_Jog"]}
+        item["settings"] = ["enable_root_motion", "force_root_lock"]
+        with open(manifest + ".result.json", "w", encoding="utf-8") as fh:
+            json.dump({"items": [item]}, fh)
+        self.assertEqual(fixtures.call(bpy.ops.morenn.ue_push), {"FINISHED"})
+        self.assertIn(
+            "UE, A_Hero_Jog.fbx: animation settings restored (enable_root_motion, force_root_lock)",
+            fixtures.log_text(),
+        )
 
     def test_pull_without_a_result_file(self):
         self.start_fake_editor()

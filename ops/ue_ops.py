@@ -267,6 +267,16 @@ class MORENN_OT_ue_push(RemoteJobOperator, bpy.types.Operator):
         return {"FINISHED"} if report.ok else {"CANCELLED"}
 
 
+def remember_unreal_settings(actions, settings, report):
+    """Keep the Unreal-only settings of a pulled animation on its actions, for the next push."""
+    if not settings:
+        return
+    for action in actions:
+        action.morenn.ue_settings = json.dumps(settings, sort_keys=True)
+    if actions:
+        report.info(f"Unreal animation settings kept on {', '.join(a.name for a in actions)} for the next push")
+
+
 def _apply_ue_report(context, ue_report, report):
     for warning in ue_report.get("warnings", []):
         report.warning(f"UE: {warning}")
@@ -275,6 +285,8 @@ def _apply_ue_report(context, ue_report, report):
             report.info(f"UE imported {item['file']}: {', '.join(item.get('imported', []))}")
         else:
             report.error(f"UE failed on {item['file']}: {'; '.join(item.get('errors', []))[:300]}")
+        if item.get("settings"):
+            report.info(f"UE, {item['file']}: animation settings restored ({', '.join(item['settings'])})")
         for warning in item.get("warnings", []):
             report.warning(f"UE, {item['file']}: {warning}")
         skeleton = item.get("skeleton")
@@ -339,6 +351,7 @@ class MORENN_OT_ue_pull(RemoteJobOperator, bpy.types.Operator):
                 for arm in res.armatures:
                     if item.get("skeleton"):
                         arm.data.morenn.ue_skeleton_path = item["skeleton"]
+                remember_unreal_settings(res.actions, item.get("settings"), report)
                 report.info(f"Imported {os.path.basename(item['file'])}", item["file"])
             except Exception as exc:
                 report.error(f"Import of {item['file']} failed: {describe_error(exc)}")

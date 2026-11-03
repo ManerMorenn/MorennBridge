@@ -42,7 +42,7 @@ exports test scenes with the add-on, imports them into a test project with `ue/s
 checks names, LODs, collision, sockets, shading, skeletons, animations and vertex colours with Unreal's Python.
 `--roundtrip` also sends the Third Person template's mannequin through Blender and back. Use a project made for
 testing: the run replaces `/Game/MorennBridgeSmoke`. With the project open in the editor and remote execution on,
-`--remote` (no `--editor`) checks Unreal Link instead: discovery, push and pull, through paths with
+`--remote` (no `--editor`) checks Unreal Link instead: discovery, push, pull and push back, through paths with
 spaces and accents.
 
 ## Versions

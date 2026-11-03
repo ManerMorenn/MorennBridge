@@ -71,5 +71,6 @@ Each item:
 | `bone_axes`, `bone_axes_map` | Bone convention and per-bone exceptions (skeletal and animation files) |
 | `skeleton`, `root_bone`, `morph_targets`, `source_armature` | Skeletal and animation files |
 | `fps`, `frame_start`, `frame_end`, `stack` | Animation files |
+| `ue_settings` | Animation files of an action pulled from Unreal: the asset settings FBX cannot hold, as Pull recorded them (property name to value, enums by name, assets by path). Set on the new asset after the import |
 
 Each asset has `node` (the FBX node) and `name` (the Unreal asset). Static meshes add `lods`, `collisions`, `sockets`, and `collision_mesh` with `collision_ratio` when a collision mesh was generated. Generated collision meshes have `role` set to `COLLISION_MESH`. Skeletal meshes add `meshes` and `bones`.

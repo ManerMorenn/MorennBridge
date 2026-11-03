@@ -10,7 +10,7 @@
 3. Unreal imports every case with mb_ue_import.py into <content-root>/<case>, then checks the assets.
 
 With --remote, Blender talks to the project's running editor instead (remote execution on): discovery, a statement,
-push and pull through the add-on's operators, into <content-root>/remote.
+push, pull and push back through the add-on's operators, into <content-root>/remote.
 
 Use a test project: the content root is deleted and recreated. Do not open its assets in the editor during a run.
 Prints one line per check and exits with status 1 when a check fails.

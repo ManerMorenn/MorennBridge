@@ -335,12 +335,14 @@ def file_fps(path):
     return modes.get(mode[0], 30.0) if mode else 30.0
 
 
-def import_unreal_file(path):
+def import_unreal_file(item):
+    """Import one item of Unreal's pull.result.json like Pull does."""
     prefs = fixtures.addon_module("prefs").get_prefs()
     report = fixtures.addon_module("core.log").Report("smoke import")
-    result = fixtures.addon_module("core.import_fbx").import_file(bpy.context, path, prefs, report)
+    result = fixtures.addon_module("core.import_fbx").import_file(bpy.context, item["file"], prefs, report)
+    fixtures.addon_module("ops.ue_ops").remember_unreal_settings(result.actions, item.get("settings"), report)
     if not report.ok:
-        raise RuntimeError(f"import of {path} failed: {fixtures.report_text(report)}")
+        raise RuntimeError(f"import of {item['file']} failed: {fixtures.report_text(report)}")
     return result
 
 
@@ -350,7 +352,7 @@ def case_mannequin(smoke, ue_export):
         pulled = {os.path.basename(i["file"])[:-4]: i for i in json.load(fh)["items"] if i.get("success")}
     original = pulled["SKM_Manny_Simple"]["asset_path"]
     scene = fixtures.fresh_scene(cm=True)
-    rig = import_unreal_file(pulled["SKM_Manny_Simple"]["file"]).armatures[0]
+    rig = import_unreal_file(pulled["SKM_Manny_Simple"]).armatures[0]
     bones = [b.name for b in rig.data.bones]  # the mesh's own bones, as Unreal exported them
     own_skeleton = smoke.export("mannequin", "mesh", [rig])
     rig.data.morenn.ue_skeleton_path = MANNEQUIN_SKELETON
@@ -360,10 +362,9 @@ def case_mannequin(smoke, ue_export):
     anims = {}
     manifests = [on_skeleton]
     for stem in ("MM_Idle", "MF_Unarmed_Jog_Fwd"):
-        path = pulled[stem]["file"]
         scene = fixtures.fresh_scene(cm=True)
-        scene.render.fps = int(round(file_fps(path)))
-        rig = import_unreal_file(path).armatures[0]
+        scene.render.fps = int(round(file_fps(pulled[stem]["file"])))
+        rig = import_unreal_file(pulled[stem]).armatures[0]
         rig.name = "Manny"
         rig.data.morenn.ue_skeleton_path = MANNEQUIN_SKELETON
         manifests.append(smoke.export("mannequin_on_skeleton", stem, [rig], mode="ANIMATION"))

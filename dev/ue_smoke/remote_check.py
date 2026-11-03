@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Unreal Link against a running editor with remote execution on: discovery, a statement, push and pull.
+"""Unreal Link against a running editor with remote execution on: discovery, a statement, push, pull and push back.
 
     blender -b --factory-startup --python dev/ue_smoke/remote_check.py -- <out_dir> <content_root> <project_name>
 
@@ -7,6 +7,7 @@ Uses the add-on's operators. Folder, file and asset names carry spaces and accen
 the editor runs included. Writes <out_dir>/remote_results.json in the format of the smoke test results.
 """
 
+import ast
 import importlib
 import json
 import os
@@ -109,8 +110,28 @@ def run(results, out_dir, content_root, project):
         results.check(objects.get("SKM_Manny_Simple") == "ARMATURE", "pulled skeletal mesh", sorted(objects))
         lods = [objects.get(f"SKM_Manny_Simple_LOD{i}") for i in (1, 2)]
         results.check(lods == ["MESH", "MESH"], "skeletal LODs kept apart from LOD0", sorted(objects))
-        actions = [a.name for a in bpy.data.actions]
-        results.check("MF_Unarmed_Jog_Fwd" in actions, "pulled animation", actions)
+        jog = bpy.data.actions.get("MF_Unarmed_Jog_Fwd")
+        if not results.check(jog is not None, "pulled animation", [a.name for a in bpy.data.actions]):
+            return
+        kept = json.loads(jog.morenn.ue_settings or "{}")
+        results.check(kept.get("enable_root_motion") is True, "pull keeps the Unreal-only animation settings", kept)
+
+        rig = next(o for o in bpy.data.objects if o.animation_data and o.animation_data.action == jog)
+        rig.name = "Manny"
+        scene.morenn.export_dir = os.path.join(work, "push anim")
+        scene.morenn.ue_content_path = folder
+        fixtures.select_only(rig)
+        fixtures.call(bpy.ops.morenn.export_ue, mode="ANIMATION")
+        pushed = fixtures.call(bpy.ops.morenn.ue_push)
+        results.check(pushed == {"FINISHED"}, "push of the pulled animation", log_tail())
+        common = "__import__('mb_ue_common')"  # loaded by the push
+        asset = f"unreal.load_asset('{folder}/A_Manny_MF_Unarmed_Jog_Fwd')"
+        with ue_ops._session(prefs) as session:
+            session.connect(node, timeout=5.0)
+            got = session.evaluate(f"{common}.read_settings({asset}, {common}.ANIM_SETTINGS)")
+        restored = ast.literal_eval(got.result) if got.success else {}
+        differ = {k: f"{restored.get(k)}, pulled {v}" for k, v in kept.items() if restored.get(k) != v}
+        results.check(restored and not differ, "push sets them again", differ or f"{len(kept)} equal")
 
 
 def main():

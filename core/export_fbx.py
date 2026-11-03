@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Export orchestration: groups -> staging -> Blender FBX exporter -> binary post-pass -> manifest."""
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -506,6 +507,19 @@ def export_file(context, exported, settings, report):
     return exported
 
 
+def unreal_settings(action, report):
+    """Unreal-only settings a pull stored on ``action`` (a dict, empty when there are none)."""
+    text = action.morenn.ue_settings if action is not None else ""
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+    except ValueError:
+        report.warning(f"'{action.name}': stored Unreal settings are not valid JSON; not sent")
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def export_groups(context, groups, settings, report):
     """Export every group; returns ``(exported_files, manifest_path)``."""
     if not groups:
@@ -584,6 +598,9 @@ def export_groups(context, groups, settings, report):
                 extra["morph_targets"] = ef.assets[0].get("morph_targets", False)
             elif ef.kind == KIND_ANIMATION:
                 extra["skeleton"] = ef.groups[0].armature.data.morenn.ue_skeleton_path or None
+                ue_settings = unreal_settings(ef.groups[0].settings_action, report)
+                if ue_settings:
+                    extra["ue_settings"] = ue_settings
             if ef.groups[0].armature is not None:
                 extra["source_armature"] = ef.groups[0].armature.name
             manifest_mod.add_item(manifest, ef.path, ef.kind, dest, ef.assets, ef.single_asset, **extra)

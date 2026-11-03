@@ -6,7 +6,8 @@
 The editor writes the stub at startup when Editor Preferences > Plugins > Python > Developer Mode is on. Checked:
 classes and functions used as ``unreal.X``, members used as ``unreal.X.y``, editor property names passed to
 ``setp``/``getp``/``set_editor_property``/``get_editor_property`` (on the receiver's class when it can be inferred)
-and enum members passed to ``enum_value``. The first name of every fallback list must exist. The fake module's
+and enum members passed to ``enum_value``. The first name of every fallback list must exist. The ``(property, kind)``
+tables in SETTINGS_TABLES must name properties of their class whose stub type fits the kind. The fake module's
 classes, editor properties (with their read-only flag), enum members and methods must exist too.
 Exit status 1 when something is missing.
 """
@@ -28,6 +29,7 @@ FUNCTION = re.compile(r"^def (\w+)\(")
 CONSTANT = re.compile(r"^(\w+)\s*[:=]")
 EDITOR_PROPERTY = re.compile(r"^    - ``(\w+)`` \((.*)\):\s+\[(Read-Only|Read-Write)\]")
 PROPERTY_CALLS = {"setp": 1, "getp": 1, "set_editor_property": 0, "get_editor_property": 0}
+SETTINGS_TABLES = {"ANIM_SETTINGS": "AnimSequence"}
 
 
 class Stub:
@@ -158,6 +160,8 @@ class ScriptChecker(ast.NodeVisitor):
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             return
         value = node.value
+        if node.targets[0].id in SETTINGS_TABLES and isinstance(value, ast.Tuple):
+            self.check_settings(SETTINGS_TABLES[node.targets[0].id], value)
         kind = None
         if isinstance(value, ast.Call):
             name = _unreal_name(value.func)
@@ -208,6 +212,21 @@ class ScriptChecker(ast.NodeVisitor):
         for member in fallbacks:
             if self.stub.member(enum, member):
                 self.findings.check(True, self.where(node), f"{enum}.{member} (fallback)")
+
+    def check_settings(self, cls, table):
+        for entry in table.elts:
+            name, kind = (e.value for e in entry.elts)
+            found = self.stub.prop(cls, name)
+            prop_type = found[0] if found else None
+            if kind == "value":
+                ok = found is not None and prop_type not in self.stub.classes
+            elif kind == "name":
+                ok = prop_type == "Name"
+            elif kind == "asset":
+                ok = prop_type in self.stub.classes
+            else:
+                ok = prop_type == kind
+            self.findings.check(ok, self.where(entry), f"{cls}.{name} ({kind}, stub type {prop_type})")
 
     def check_property(self, node):
         offset = PROPERTY_CALLS[node.func.attr]

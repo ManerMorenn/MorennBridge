@@ -156,6 +156,10 @@ settings, renames the skeleton and physics asset with your prefixes, links the g
 Collision Mesh and saves. **Pull Selected Assets from Unreal** exports the assets selected in Unreal's Content
 Browser and imports them here. Blender's *Allow Online Access* preference must be on.
 
+FBX has no place for the settings of an Unreal animation asset (root motion, root lock, retarget source, rate
+scale, looping, additive settings). Pull stores them on the Blender action, and pushing that action sets them on
+the new asset again.
+
 *Push to Unreal after export* needs an editor in the list, so press **Find Unreal** first; otherwise the Log says the
 push was skipped. Blender stays usable while Unreal imports: the panel shows the status, and the Log gets the
 result when Unreal answers. Push and Pull are greyed out until then.

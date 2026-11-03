@@ -30,6 +30,7 @@ class AssetGroup:
     action: object = None
     nla_track: object = None
     frame_range: tuple = None
+    settings_action: object = None  # action whose Unreal settings go with the animation (pulled from Unreal)
 
     @property
     def all_objects(self):
@@ -260,7 +261,9 @@ def build_groups(objects, prefs, scene, mode="AUTO", destination=""):
     return groups
 
 
-def _anim_group(prefs, arm, rig_base, meshes, destination, anim_label, action=None, track=None, frame_range=None):
+def _anim_group(
+    prefs, arm, rig_base, meshes, destination, anim_label, action=None, track=None, frame_range=None, settings=None
+):
     name = naming.anim_asset_name(
         prefs.anim_name_template, prefs.prefix_anim, rig_base, naming.sanitize_asset_name(anim_label)
     )
@@ -275,6 +278,7 @@ def _anim_group(prefs, arm, rig_base, meshes, destination, anim_label, action=No
         action=action,
         nla_track=track,
         frame_range=frame_range,
+        settings_action=settings or action,
     )
 
 
@@ -348,13 +352,21 @@ def build_anim_groups(objects, prefs, scene, source="ACTIVE_ACTION", destination
                                 strip.name,
                                 track=track,
                                 frame_range=(int(round(strip.frame_start)), int(round(strip.frame_end))),
+                                settings=strip.action,
                             )
                         )
         else:  # SCENE_RANGE
-            label = ad.action.name if (ad is not None and ad.action is not None) else scene.name
+            active = ad.action if ad is not None else None
             groups.append(
                 _anim_group(
-                    prefs, arm, rig_base, meshes, destination, label, frame_range=(scene.frame_start, scene.frame_end)
+                    prefs,
+                    arm,
+                    rig_base,
+                    meshes,
+                    destination,
+                    active.name if active is not None else scene.name,
+                    frame_range=(scene.frame_start, scene.frame_end),
+                    settings=active,
                 )
             )
     return groups

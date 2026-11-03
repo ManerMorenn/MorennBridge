@@ -91,6 +91,14 @@ InterchangeFrameAlignment = _enum(
 InterchangeMaterialImportOption = _enum(
     "InterchangeMaterialImportOption", "IMPORT_AS_MATERIALS", "IMPORT_AS_MATERIAL_INSTANCES"
 )
+RootMotionRootLock = _enum("RootMotionRootLock", "REF_POSE", "ANIM_FIRST_FRAME", "ZERO")
+AnimInterpolationType = _enum("AnimInterpolationType", "LINEAR", "STEP")
+AdditiveAnimationType = _enum(
+    "AdditiveAnimationType", "AAT_NONE", "AAT_LOCAL_SPACE_BASE", "AAT_ROTATION_OFFSET_MESH_SPACE"
+)
+AdditiveBasePoseType = _enum(
+    "AdditiveBasePoseType", "ABPT_NONE", "ABPT_REF_POSE", "ABPT_ANIM_SCALED", "ABPT_ANIM_FRAME", "ABPT_LOCAL_ANIM_FRAME"
+)
 FBXImportType = _enum("FBXImportType", "FBXIT_STATIC_MESH", "FBXIT_SKELETAL_MESH", "FBXIT_ANIMATION")
 FBXNormalImportMethod = _enum(
     "FBXNormalImportMethod", "FBXNIM_COMPUTE_NORMALS", "FBXNIM_IMPORT_NORMALS", "FBXNIM_IMPORT_NORMALS_AND_TANGENTS"
@@ -239,7 +247,22 @@ class SkeletalMesh(Object):
 
 
 class AnimSequence(Object):
-    _props = {"skeleton": Prop(Skeleton, None, read_only=True)}
+    _props = {
+        "skeleton": Prop(Skeleton, None, read_only=True),
+        "enable_root_motion": Prop(bool, False),
+        "root_motion_root_lock": Prop(RootMotionRootLock, RootMotionRootLock.REF_POSE),
+        "force_root_lock": Prop(bool, False),
+        "use_normalized_root_motion_scale": Prop(bool, True),
+        "retarget_source": Prop(str, "None"),
+        "retarget_source_asset": Prop(SkeletalMesh, None),
+        "rate_scale": Prop(float, 1.0),
+        "loop": Prop(bool, False),
+        "interpolation": Prop(AnimInterpolationType, AnimInterpolationType.LINEAR),
+        "additive_anim_type": Prop(AdditiveAnimationType, AdditiveAnimationType.AAT_NONE),
+        "ref_pose_type": Prop(AdditiveBasePoseType, AdditiveBasePoseType.ABPT_REF_POSE),
+        "ref_pose_seq": Prop(Object, None),
+        "ref_frame_index": Prop(int, 0),
+    }
 
 
 ASSET_CLASSES = {c.__name__: c for c in (StaticMesh, SkeletalMesh, AnimSequence, Skeleton, PhysicsAsset, Material)}

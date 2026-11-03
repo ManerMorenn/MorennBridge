@@ -97,6 +97,14 @@ class MORENN_PG_bone(bpy.types.PropertyGroup):
     axis_secondary: EnumProperty(name="UE secondary axis", items=AXIS_OR_DEFAULT_ITEMS, default="DEFAULT")
 
 
+class MORENN_PG_action(bpy.types.PropertyGroup):
+    ue_settings: StringProperty(
+        name="Unreal settings",
+        description="Animation settings that exist only in Unreal (root motion, retarget source...), JSON. "
+        "Pull records them, Push sets them again",
+    )
+
+
 class MORENN_PG_scene(bpy.types.PropertyGroup):
     export_dir: StringProperty(name="Export folder", subtype="DIR_PATH", default="//export/")
     ue_content_path: StringProperty(name="UE content path", default="/Game/Imports")
@@ -143,6 +151,7 @@ classes = (
     MORENN_PG_object,
     MORENN_PG_armature,
     MORENN_PG_bone,
+    MORENN_PG_action,
     MORENN_PG_scene,
     MORENN_PG_uenode,
     MORENN_PG_runtime,
@@ -155,6 +164,7 @@ def register():
     bpy.types.Object.morenn = PointerProperty(type=MORENN_PG_object)
     bpy.types.Armature.morenn = PointerProperty(type=MORENN_PG_armature)
     bpy.types.Bone.morenn = PointerProperty(type=MORENN_PG_bone)
+    bpy.types.Action.morenn = PointerProperty(type=MORENN_PG_action)
     bpy.types.Scene.morenn = PointerProperty(type=MORENN_PG_scene)
     bpy.types.WindowManager.morenn_rt = PointerProperty(type=MORENN_PG_runtime)
 
@@ -162,6 +172,7 @@ def register():
 def unregister():
     del bpy.types.WindowManager.morenn_rt
     del bpy.types.Scene.morenn
+    del bpy.types.Action.morenn
     del bpy.types.Bone.morenn
     del bpy.types.Armature.morenn
     del bpy.types.Object.morenn

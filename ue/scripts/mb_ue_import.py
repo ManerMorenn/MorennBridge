@@ -312,6 +312,11 @@ def post_process(item, options, paths, report_item):
         if new_path != path:
             renames.append([path, new_path])
             paths[index] = new_path
+        if cls == "AnimSequence" and item.get("ue_settings"):
+            applied, failed = C.apply_settings(asset, item["ue_settings"], C.ANIM_SETTINGS)
+            report_item["settings"] = applied
+            if failed:
+                report_item["warnings"].append(f"{asset.get_name()}: settings not restored: {', '.join(failed)}")
     # complex collision mesh link
     if options.get("link_complex_collision"):
         for a in item.get("assets", []):
