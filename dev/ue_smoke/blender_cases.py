@@ -1,0 +1,298 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Blender side of the Unreal smoke test: build the cases, export them with MorennBridge, write cases.json.
+
+    blender -b --factory-startup --python dev/ue_smoke/blender_cases.py -- <out_dir> <content_root> [<ue_export_dir>]
+
+Every case gets a folder with its .blend, FBX files and manifests. cases.json lists the manifests to import in order
+and what Unreal should end up with, in Unreal's axes and centimetres. With <ue_export_dir> (files exported from
+Unreal by unreal_checks.py), the mannequin round-trip case is added.
+"""
+
+import importlib
+import json
+import math
+import os
+import pathlib
+import runpy
+import sys
+import traceback
+
+import bpy
+from mathutils import Quaternion, Vector
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+MANNEQUIN_SKELETON = "/Game/Characters/Mannequins/Meshes/SK_Mannequin"
+
+
+def ue(v):
+    """Blender (cm) -> Unreal: the files use Unreal's axes, Unreal only flips Y."""
+    return [round(v[0], 4), round(-v[1], 4), round(v[2], 4)]
+
+
+def triangles(obj):
+    return sum(len(p.vertices) - 2 for p in obj.data.polygons)
+
+
+def bounds(obj):
+    """Unreal bounds of a static mesh: rotation and scale are baked, translation is not."""
+    m = obj.matrix_world.to_3x3()
+    points = [ue(m @ v.co) for v in obj.data.vertices]
+    return [[min(p[i] for p in points) for i in range(3)], [max(p[i] for p in points) for i in range(3)]]
+
+
+class Smoke:
+    def __init__(self, out_dir, content_root):
+        self.out = out_dir
+        self.root = content_root
+        self.cases = []
+        self.prefs = fixtures.addon_module("prefs").get_prefs()
+
+    def export(self, case, step, objects, mode="AUTO", **prefs):
+        folder = os.path.join(self.out, case, step)
+        os.makedirs(folder, exist_ok=True)
+        scene = bpy.context.scene
+        scene.morenn.export_dir = folder
+        scene.morenn.ue_content_path = f"{self.root}/{case}"
+        scene.morenn.log.clear()
+        bpy.ops.wm.save_as_mainfile(filepath=os.path.join(folder, f"{case}.blend"))
+        saved = {name: getattr(self.prefs, name) for name in prefs}
+        try:
+            for name, value in prefs.items():
+                setattr(self.prefs, name, value)
+            fixtures.select_only(*objects)
+            fixtures.call(bpy.ops.morenn.export_ue, mode=mode)
+        finally:
+            for name, value in saved.items():
+                setattr(self.prefs, name, value)
+        errors = [e.message for e in scene.morenn.log if e.level == "ERROR"]
+        if errors or not scene.morenn.last_manifest.startswith(folder):
+            raise RuntimeError(f"{case}/{step}: export failed: {errors}")
+        return scene.morenn.last_manifest
+
+    def add(self, name, item, manifests, expect):
+        self.cases.append({"name": name, "item": item, "manifests": manifests, "expect": expect})
+        print(f"[smoke] case {name}: {len(manifests)} manifest(s)")
+
+    def write(self):
+        path = os.path.join(self.out, "cases.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"content_root": self.root, "cases": self.cases}, fh, indent=1)
+        return path
+
+
+# ---------------------------------------------------------------------- static meshes
+
+
+def static_expect(obj, collision_mesh=None, **extra):
+    entry = {"triangles": [triangles(obj)], "bounds": bounds(obj)}
+    if collision_mesh:
+        entry["complex_collision"] = collision_mesh
+    entry.update(extra)
+    return entry
+
+
+def case_combined(smoke):
+    """Item 1: several meshes in one file, plus generated collision meshes in the same file."""
+    scene = fixtures.fresh_scene(cm=True)
+    crate = fixtures.make_cube("Crate", size=40.0)
+    barrel = fixtures.make_cube("Barrel", size=30.0, location=(100, 0, 0))
+    barrel.rotation_euler = (0, 0, math.radians(30))
+    rock = fixtures.make_sphere("Rock", radius=25.0, location=(0, 200, 0))
+    scene.morenn.generate_collision_mesh = True
+    scene.morenn.collision_ratio = 0.5
+    bpy.context.view_layer.update()
+    manifest = smoke.export("combined", "export", [crate, barrel, rock], file_mode="COMBINED")
+    meshes = {}
+    for obj in (crate, barrel, rock):
+        meshes[f"SM_{obj.name}"] = static_expect(obj, collision_mesh=f"SM_{obj.name}_COLL")
+        meshes[f"SM_{obj.name}_COLL"] = {
+            "triangles_at_most": triangles(obj),
+            "bounds": bounds(obj),
+            "bounds_tolerance": 1.0,
+        }
+    smoke.add("combined", 1, [manifest], {"static_meshes": meshes, "only_static_meshes": sorted(meshes)})
+
+
+def case_single_file_collision(smoke):
+    """Item 1: one mesh and its generated collision mesh in its own file; one plain mesh named after its file."""
+    scene = fixtures.fresh_scene(cm=True)
+    pillar = fixtures.make_sphere("Pillar", segments=12, rings=8, radius=15.0)
+    pillar.scale = (1, 1, 3)
+    bpy.context.view_layer.update()
+    scene.morenn.generate_collision_mesh = True
+    scene.morenn.collision_ratio = 0.3
+    first = smoke.export("single_file", "with_collision", [pillar])
+    scene.morenn.generate_collision_mesh = False
+    box = fixtures.make_cube("Box", size=20.0, location=(50, 0, 0))
+    second = smoke.export("single_file", "plain", [box])
+    meshes = {
+        "SM_Pillar": static_expect(pillar, collision_mesh="SM_Pillar_COLL"),
+        "SM_Pillar_COLL": {"triangles_at_most": triangles(pillar)},
+        "SM_Box": static_expect(box),
+    }
+    smoke.add("single_file", 1, [first, second], {"static_meshes": meshes, "only_static_meshes": sorted(meshes)})
+
+
+def tower():
+    """A sphere with two LODs, a convex and a box collision piece and a socket."""
+    fixtures.fresh_scene(cm=True)
+    lods = [
+        fixtures.make_sphere("Tower", segments=32, rings=16, radius=20.0),
+        fixtures.make_sphere("Tower_LOD1", segments=16, rings=8, radius=20.0),
+        fixtures.make_sphere("Tower_LOD2", segments=8, rings=4, radius=20.0),
+    ]
+    for name, size, z in (("UCX_Tower", 10.0, -10.0), ("UBX_Tower", 8.0, 10.0)):
+        fixtures.make_cube(name, size=size, location=(0, 0, z), uv=False, color=False, material=False)
+    fixtures.make_empty("SOCKET_Top", location=(5, 3, 30), parent=lods[0])
+    bpy.context.view_layer.update()
+    expect = {
+        "triangles": [triangles(o) for o in lods],
+        "bounds": bounds(lods[0]),
+        "simple_collision": 2,
+        "convex_collision": 1,
+        "sockets": {"Top": ue(Vector((5, 3, 30)))},
+    }
+    return lods[0], {"static_meshes": {"SM_Tower": expect}, "only_static_meshes": ["SM_Tower"]}
+
+
+def case_lods(smoke):
+    """Items 2 and 3: LOD chains, collision binding and sockets, for both LOD modes and the legacy importer."""
+    for name, item, prefs in (
+        ("lod_naming", 2, {"lod_mode": "LOD_NAMING"}),
+        ("lod_groups", 2, {"lod_mode": "LODGROUP_NODES"}),
+        ("lod_legacy", 3, {"lod_mode": "AUTO", "ue_importer": "LEGACY"}),
+    ):
+        obj, expect = tower()
+        if name == "lod_groups":
+            expect["static_meshes"]["SM_Tower"]["sockets"] = {"Top": None}  # Interchange skips LOD group children
+        manifest = smoke.export(name, "export", [obj], **prefs)
+        smoke.add(name, item, [manifest], expect)
+
+
+# ---------------------------------------------------------------------- skeletal meshes and animations
+
+
+def add_socket_bone(rig, parent, name, offset):
+    compat = fixtures.addon_module("compat")
+    bpy.context.view_layer.objects.active = rig
+    with bpy.context.temp_override(active_object=rig, object=rig, selected_objects=[rig], **compat.window_override()):
+        bpy.ops.object.mode_set(mode="EDIT")
+        parent_bone = rig.data.edit_bones[parent]
+        bone = rig.data.edit_bones.new(name)
+        bone.head = parent_bone.tail
+        bone.tail = parent_bone.tail + Vector(offset)
+        bone.parent = parent_bone
+        bone.use_deform = False
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def bone_expect(rig, names):
+    out = {}
+    for name in names:
+        bone = rig.data.bones[name]
+        head = rig.matrix_world @ bone.head_local
+        direction = (rig.matrix_world.to_3x3() @ (bone.tail_local - bone.head_local)).normalized()
+        out[name] = {
+            "parent": bone.parent.name if bone.parent else "None",
+            "position": ue(head),
+            "x_axis": ue(direction),
+        }
+    return out
+
+
+def case_skeletal(smoke):
+    """Items 4, 5, 7, 9: socket bone, single root, reference pose, morph target, skeleton and physics renames."""
+    fixtures.fresh_scene(cm=True)
+    rig, _body = rigged_character("Hero", bones=3, bone_length=30.0, shape_key=True)
+    add_socket_bone(rig, "bone_02", "SOCKET_Hand", (10.0, 0.0, 0.0))
+    bpy.context.view_layer.update()
+    manifest = smoke.export("skeletal", "export", [rig])
+    hand = rig.matrix_world @ rig.data.bones["SOCKET_Hand"].head_local
+    expect = {
+        "skeletal_meshes": {
+            "SKM_Hero": {
+                "skeleton": "SKEL_Hero",
+                "physics_asset": "PHYS_Hero",
+                "bones": bone_expect(rig, ["root", "bone_01", "bone_02"]),
+                "sockets": {"Hand": {"bone": "bone_02", "position": ue(hand)}},
+                "morph_targets": ["Puff"],
+            }
+        },
+        "absent": ["SKM_Hero_Skeleton", "SKM_Hero_PhysicsAsset"],
+    }
+    smoke.add("skeletal", 5, [manifest], expect)
+
+
+def key_pose(rig, frame, root_location, bend_degrees):
+    root = rig.pose.bones["root"]
+    root.location = root_location
+    root.keyframe_insert("location", frame=frame)
+    bend = rig.pose.bones["bone_01"]
+    bend.rotation_mode = "QUATERNION"
+    bend.rotation_quaternion = Quaternion((1, 0, 0), math.radians(bend_degrees))
+    bend.keyframe_insert("rotation_quaternion", frame=frame)
+
+
+def case_animation(smoke, name, fps, start, end):
+    """Item 6: naming, length and keys at a frame rate; the mesh is pushed first, then the animation."""
+    scene = fixtures.fresh_scene(cm=True)
+    scene.render.fps = fps
+    rig, _body = rigged_character("Runner", bones=3, bone_length=30.0, shape_key=False)
+    key_pose(rig, start, (0, 0, 0), 0)
+    key_pose(rig, (start + end) // 2, (0, 20, 5), 45)
+    key_pose(rig, end, (0, 50, 0), 90)
+    rig.animation_data.action.name = "Run"
+    bpy.context.view_layer.update()
+    mesh = smoke.export(name, "mesh", [rig])
+    rig.data.morenn.ue_skeleton_path = f"{smoke.root}/{name}/SKEL_Runner"
+    anim = smoke.export(name, "anim", [rig], mode="ANIMATION")
+    poses = {}
+    for frame in (start, (start + end) // 2, end):
+        scene.frame_set(frame)
+        poses[str(frame - start)] = {pb.name: ue(rig.matrix_world @ pb.head) for pb in rig.pose.bones}
+    expect = {
+        "animations": {
+            "A_Runner_Run": {
+                "skeleton": f"{smoke.root}/{name}/SKEL_Runner",
+                "keys": end - start + 1,
+                "length": (end - start) / fps,
+                "poses": poses,
+            }
+        }
+    }
+    smoke.add(name, 6, [mesh, anim], expect)
+
+
+CASES = (
+    case_combined,
+    case_single_file_collision,
+    case_lods,
+    case_skeletal,
+    lambda smoke: case_animation(smoke, "anim_30fps", 30, 0, 30),
+    lambda smoke: case_animation(smoke, "anim_24fps", 24, 1, 24),
+)
+
+
+def main():
+    argv = sys.argv[sys.argv.index("--") + 1 :]
+    out_dir, content_root = argv[0], argv[1]
+    smoke = Smoke(out_dir, content_root)
+    failed = []
+    for build in CASES:
+        try:
+            build(smoke)
+        except Exception:
+            traceback.print_exc()
+            failed.append(getattr(build, "__name__", "case"))
+    path = smoke.write()
+    print(f"[smoke] wrote {path}; {len(smoke.cases)} case(s), {len(failed)} failed to build: {failed}")
+    sys.stdout.flush()
+    os._exit(1 if failed else 0)
+
+
+namespace = runpy.run_path(str(ROOT / "tests" / "run_tests.py"), run_name="ue_smoke")
+os.environ["MORENN_ADDON_MODULE"] = namespace["load_addon"]().__name__
+fixtures = importlib.import_module("tests.fixtures")
+rigged_character = importlib.import_module("tests.test_export_skeletal")._rigged_character
+main()
