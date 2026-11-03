@@ -35,8 +35,6 @@ editor that speaks the same protocol.
 - Animation settings that exist only on the Unreal asset (root motion, root lock, retarget source, rate scale,
   looping, additive settings) are not part of FBX. Pull keeps them on the Blender action and a push of that action
   sets them again, as they were when pulled. Animations made in Blender get Unreal's defaults.
-- Skeletal mesh LODs are not exported. The LODs of a skeletal mesh imported from Unreal become LOD objects
-  (`SKM_Manny_LOD1` …) that the export leaves out; Unreal can generate LODs again.
 
 ## FAQ
 

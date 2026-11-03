@@ -228,6 +228,55 @@ def case_skeletal(smoke):
     smoke.add("skeletal", 5, [manifest], expect)
 
 
+def skinned_sphere(rig, name, segments, rings, radius=15.0, bottom=0.0, top=90.0):
+    """A sphere stretched from ``bottom`` to ``top`` (cm); each vertex weighted to the 30 cm bone at its height."""
+    centre = (bottom + top) / 2
+    obj = fixtures.make_sphere(name, segments=segments, rings=rings, radius=radius, location=(0, 0, centre))
+    for v in obj.data.vertices:
+        v.co.z *= (top - bottom) / (2 * radius)
+    names = [b.name for b in rig.data.bones]
+    groups = {n: obj.vertex_groups.new(name=n) for n in names}
+    for v in obj.data.vertices:
+        groups[names[max(0, min(int((centre + v.co.z) // 30.0), len(names) - 1))]].add([v.index], 1.0, "REPLACE")
+    obj.modifiers.new("Armature", "ARMATURE").object = rig
+    obj.parent = rig
+    return obj
+
+
+def lod_of(obj, render, index):
+    obj.morenn.role, obj.morenn.lod_index, obj.morenn.lod_of = "LOD", index, render
+    return obj
+
+
+def case_skeletal_lods(smoke, name, importer):
+    """Skeletal LODs, written as one FBX LOD group: three levels, LOD0 and LOD2 made of two meshes each."""
+    fixtures.fresh_scene(cm=True)
+    rig = fixtures.make_armature("Knight", bones=3, bone_length=30.0)
+    body = skinned_sphere(rig, "Body", 32, 16)
+    helmet = skinned_sphere(rig, "Helmet", 16, 8, radius=8.0, bottom=80.0, top=96.0)
+    levels = [[body, helmet]]
+    levels.append([lod_of(skinned_sphere(rig, "Body_LOD1", 16, 8), body, 1)])
+    levels.append(
+        [
+            lod_of(skinned_sphere(rig, "Body_LOD2", 8, 4), body, 2),
+            lod_of(skinned_sphere(rig, "Helmet_LOD2", 8, 4, radius=8.0, bottom=80.0, top=96.0), helmet, 2),
+        ]
+    )
+    bpy.context.view_layer.update()
+    manifest = smoke.export(name, "export", [rig], ue_importer=importer)
+    expect = {
+        "skeletal_meshes": {
+            "SKM_Knight": {
+                "skeleton": "SKEL_Knight",
+                "bones": bone_expect(rig, ["root", "bone_01", "bone_02"]),
+                "lods": [sum(triangles(o) for o in level) for level in levels],
+            }
+        },
+        "absent": ["SKM_Knight_Skeleton"],
+    }
+    smoke.add(name, 5, [manifest], expect)
+
+
 def key_pose(rig, frame, root_location, bend_degrees):
     root = rig.pose.bones["root"]
     root.location = root_location
@@ -385,6 +434,8 @@ CASES = (
     case_single_file_collision,
     case_lods,
     case_skeletal,
+    lambda smoke: case_skeletal_lods(smoke, "skeletal_lods", "INTERCHANGE"),
+    lambda smoke: case_skeletal_lods(smoke, "skeletal_lods_legacy", "LEGACY"),
     lambda smoke: case_animation(smoke, "anim_30fps", 30, 0, 30),
     lambda smoke: case_animation(smoke, "anim_24fps", 24, 1, 24),
     case_vertex_colours,

@@ -97,6 +97,9 @@ meshes skinned to it become one `SKM_<Name>.fbx`. Rules that make Unreal happy a
   and their ancestors; weights on other bones are merged into the nearest exported ancestor; at most eight
   influences per vertex (preference);
 - shape keys survive modifiers, morph targets are exported;
+- LOD meshes skinned to the same armature (`Body_LOD1`, `Body_LOD2` …, or role *LOD* with an index) become the
+  skeletal mesh's LODs, written as an FBX LOD group that both Unreal importers read; a LOD may be made of several
+  meshes;
 - bones are written with the X axis along the bone (Unreal/Maya convention) for Blender-made rigs; rigs imported
   from Unreal keep their original convention bone by bone, so re-exports match the Unreal skeleton exactly;
 - the temporary `Armature` node Blender normally adds above the root bone is removed from the file, so the root
@@ -177,7 +180,7 @@ settings; the defaults are what the rest of this guide describes.
 | Group | Settings |
 |---|---|
 | **Naming** | Prefixes for static meshes (`SM_`), skeletal meshes (`SKM_`), skeleton (`SKEL_`) and physics asset (`PHYS_`, both applied by the Unreal-side script), animations (`A_`); the list of known prefixes that are stripped before re-prefixing; the animation name template `{prefix}{rig}_{action}`; the generated collision mesh name `{asset}_COLL`. |
-| **Export** | Bone axis convention for Blender-made rigs (primary = Unreal axis along the bone, default X; secondary default Y); max bone influences per vertex (8); vertex colour space (sRGB); smoothing (smoothing groups); triangulate; export tangents; static mesh files (one per asset or combined); LOD mode (Auto = `LOD<i>_Name` pattern for Interchange, FBX LOD group nodes for the legacy importer); strip the armature null node (keep on); include the mesh in animation files; textures (names only or copy next to the FBX); generated collision mesh file (same file or separate) and its minimum face count. |
+| **Export** | Bone axis convention for Blender-made rigs (primary = Unreal axis along the bone, default X; secondary default Y); max bone influences per vertex (8); vertex colour space (sRGB); smoothing (smoothing groups); triangulate; export tangents; static mesh files (one per asset or combined); LOD mode (Auto = `LOD<i>_Name` pattern for Interchange, FBX LOD group nodes for the legacy importer; skeletal mesh LODs are always an FBX LOD group); strip the armature null node (keep on); include the mesh in animation files; textures (names only or copy next to the FBX); generated collision mesh file (same file or separate) and its minimum face count. |
 | **Unreal import** | Which Unreal importer the files target (Interchange, the UE 5.8 default, or legacy); default UE content path; Nanite; lightmap UV generation; physics asset creation; materials and textures; renaming of skeleton/physics asset; saving; animation frame alignment; linking the generated collision mesh as Complex Collision Mesh; letting Unreal recompute tangents. These feed the manifest and the push script. |
 | **Import from Unreal** | Convert bone axes; per-bone axis detection tolerance (45°); bone alignment tolerance for lengths (15°); root, helper and minimum bone lengths (cm); reset pose after mesh import; connect bones when heads touch tails; tidy the hierarchy; animation frame offset. |
 | **Scene setup** | Viewport clip start/end (cm), grid scale, frame rate, start frame at 0, camera clip ranges. |

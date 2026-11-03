@@ -133,8 +133,8 @@ class ImportUETests(unittest.TestCase):
             self.import_fbx.import_file(bpy.context, done[0].path, self.prefs, report).actions[0].use_frame_range
         )
 
-    def test_skeletal_lods_from_unreal_stay_out_of_lod0(self):
-        """Unreal writes a skeletal mesh's LODs as skinned meshes under one LOD group, last LOD first."""
+    def test_skeletal_lods_from_unreal_become_lod_objects(self):
+        """Unreal writes a skeletal mesh's LODs as skinned meshes under one LOD group, last LOD first in the scene."""
         rig, body = _rigged_character("Hero", shape_key=False)
         lods = {}
         for index in (2, 0, 1):
@@ -144,7 +144,10 @@ class ImportUETests(unittest.TestCase):
                 fixtures.link(mesh)
             mesh.name = f"SKM_Hero_LOD{index}"
             lods[index] = mesh
-        info = self.import_fbx.ImportInfo(lod_groups=[("SKM_Hero_LodGroup", [f"SKM_Hero_LOD{i}" for i in range(3)])])
+        info = self.import_fbx.ImportInfo(
+            lod_groups=[("SKM_Hero_LodGroup", [f"SKM_Hero_LOD{i}" for i in range(3)])],
+            lod_levels={f"SKM_Hero_LOD{i}": i for i in range(3)},
+        )
         result = self.import_fbx.ImportResult("SKM_Hero.fbx", info, objects=[rig, *lods.values()], armatures=[rig])
         result.meshes = [lods[2], lods[0], lods[1]]
         report = self.Report()
@@ -157,8 +160,8 @@ class ImportUETests(unittest.TestCase):
         self.assertIn("LOD1/2 kept as LOD objects", fixtures.report_text(report))
         done, _, export_report = fixtures.run_export([rig], self.tmp)
         self.assertTrue(export_report.ok, fixtures.report_text(export_report))
-        self.assertEqual(set(fixtures.fbx_models(fixtures.fbx_load(done[0].path)[0], b"Mesh")), {"SKM_Hero"})
-        self.assertIn("skeletal mesh LODs are not exported", fixtures.report_text(export_report))
+        groups = fixtures.addon_module("fbxpatch.patches").lod_groups(fixtures.fbx_load(done[0].path)[0])
+        self.assertEqual(groups, [("SKM_Hero_LodGroup", ["SKM_Hero_LOD0", "SKM_Hero_LOD1", "SKM_Hero_LOD2"])])
 
     def test_metre_scene_rescales(self):
         path, rig, body = make_ue_style_file(self.tmp)

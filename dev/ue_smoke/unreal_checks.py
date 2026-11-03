@@ -138,6 +138,9 @@ def check_skeletal(case, name, exp):
     if "physics_asset" in exp:
         got = physics.get_name() if physics else None
         case.check(got == exp["physics_asset"], f"{name}: physics asset", got)
+    if "lods" in exp:
+        triangles = lod_triangles(mesh)
+        case.check(triangles == exp["lods"], f"{name}: triangles per LOD", f"{triangles}, expected {exp['lods']}")
     pose = POSE.get_reference_pose(skeleton)
     names = sorted(str(n) for n in POSE.get_bone_names(pose))
     case.check(names == sorted(exp["bones"]), f"{name}: bones", names)
@@ -207,11 +210,20 @@ def mesh_colours(mesh):
     return valid, sorted({(srgb_byte(c.r), srgb_byte(c.g), srgb_byte(c.b)) for c in values})
 
 
-def copy_to_dynamic_mesh(mesh):
-    """LOD0 of a static or skeletal mesh, as imported (source model)."""
+def lod_triangles(mesh):
+    """Triangles per LOD of a static or skeletal mesh."""
+    if isinstance(mesh, unreal.StaticMesh):
+        return [mesh.get_num_triangles(i) for i in range(mesh.get_num_lods())]
+    count = unreal.SkeletalMeshEditorSubsystem.get_lod_count(mesh)
+    return [copy_to_dynamic_mesh(mesh, i).get_triangle_count() for i in range(count)]
+
+
+def copy_to_dynamic_mesh(mesh, lod_index=0):
+    """A LOD of a static or skeletal mesh, as imported (source model)."""
     options = unreal.GeometryScriptCopyMeshFromAssetOptions()
     lod = unreal.GeometryScriptMeshReadLOD()
     lod.set_editor_property("lod_type", unreal.GeometryScriptLODType.SOURCE_MODEL)
+    lod.set_editor_property("lod_index", lod_index)
     utils = unreal.GeometryScript_AssetUtils
     copy = (
         utils.copy_mesh_from_skeletal_mesh
@@ -299,9 +311,8 @@ def compare_skeletal(case, name, exp):
         distance, at, angle, at_angle = pose_difference(pose, ref_pose, shared, use_reference_pose=True)
         case.check(distance < 0.01, f"{name}: rest positions", f"largest difference {distance:.5f} cm ({at})")
         case.check(angle < 0.01, f"{name}: rest rotations", f"largest difference {angle:.5f} deg ({at_angle})")
-    triangles = copy_to_dynamic_mesh(mesh).get_triangle_count()
-    ref_triangles = copy_to_dynamic_mesh(reference).get_triangle_count()
-    case.check(triangles == ref_triangles, f"{name}: LOD0 triangles", f"{triangles}, original {ref_triangles}")
+    triangles, ref_triangles = lod_triangles(mesh), lod_triangles(reference)
+    case.check(triangles == ref_triangles, f"{name}: triangles per LOD", f"{triangles}, original {ref_triangles}")
     bounds, ref_bounds = mesh.get_imported_bounds(), reference.get_imported_bounds()
     got = vec(bounds.origin) + vec(bounds.box_extent)
     wanted = vec(ref_bounds.origin) + vec(ref_bounds.box_extent)

@@ -245,7 +245,30 @@ def bone_axes_map(arm_obj, settings):
     return default, bones.axes_map_from_stored(arm_obj, default)
 
 
-def _stage_skeletal_group(st, group, settings, node_names, report):
+def _skeletal_levels(group, lod_mode, report):
+    """Meshes per LOD level: LOD0 = the render meshes, then the LOD objects skinned to the same armature."""
+    levels = [list(group.render)]
+    if group.lods and lod_mode == "NONE":
+        report.info(f"'{group.asset_name}': LOD objects ignored (LOD mode = NONE)")
+        return levels
+    for index in range(1, group.lod_count):
+        objs = []
+        for obj in group.lods.get(index, []):
+            if classify.armature_of(obj) == group.armature:
+                objs.append(obj)
+            else:
+                report.warning(
+                    f"'{obj.name}': LOD{index} of '{group.asset_name}' is not skinned to its armature; left out"
+                )
+        if objs:
+            levels.append(objs)
+        else:
+            report.warning(f"'{group.asset_name}': LOD{index} missing; LOD chain has a gap")
+    return levels
+
+
+def _stage_skeletal_group(st, group, settings, lod_mode, node_names, report):
+    """Stage one skeletal mesh. Returns the manifest entries and its LOD levels (FBX node names) when it has LODs."""
     arm = group.armature
     anchor = staging.translation_removed(arm.matrix_world)
     export_set = export_bone_names(arm)
@@ -261,31 +284,40 @@ def _stage_skeletal_group(st, group, settings, node_names, report):
     )
     node_names.append("Armature")
     targets = merge_targets_for(arm, exported)
-    entry = {"node": group.asset_name, "name": group.asset_name, "meshes": 0, "bones": len(exported)}
-    if group.lods:
-        report.info(f"'{group.asset_name}': skeletal mesh LODs are not exported; Unreal can generate them")
-    first = True
-    for mesh in group.render:
-        node = group.asset_name if first else f"{group.asset_name}_{naming.sanitize_asset_name(mesh.name)}"
-        if node in node_names:
-            raise staging.StagingError(f"Duplicate FBX node name '{node}' (E008)")
-        node_names.append(node)
-        obj = st.stage_mesh(
-            mesh,
-            node,
-            anchor @ mesh.matrix_world,
-            role="RENDER",
-            triangulate=settings.triangulate,
-            keep_shape_keys=True,
-            armature=arm_obj,
-        )
-        n_trunc, n_unweighted = staging.limit_influences(obj, exported, settings.influence_limit, targets)
-        if n_trunc:
-            report.info(f"'{mesh.name}': {n_trunc} vertices had more than {settings.influence_limit} influences (I009)")
-        if n_unweighted:
-            report.warning(f"'{mesh.name}': {n_unweighted} vertices have no weights on exported bones (W021)")
-        entry["meshes"] += 1
-        first = False
+    entry = {"node": group.asset_name, "name": group.asset_name, "meshes": len(group.render), "bones": len(exported)}
+    levels = _skeletal_levels(group, lod_mode, report)
+    lod_nodes = []
+    for index, meshes in enumerate(levels):
+        names = []
+        for k, mesh in enumerate(meshes):
+            base = (naming.parse_lod_name(mesh.name) or (mesh.name, 0))[0]
+            suffix = "" if len(meshes) == 1 else f"_{naming.sanitize_asset_name(base)}"
+            if len(levels) > 1:  # LOD group: <asset>_LOD<i>, or <asset>_<mesh>_LOD<i> under a <asset>_LOD<i> null
+                node = f"{group.asset_name}{suffix}_LOD{index}"
+            else:
+                node = group.asset_name if k == 0 else f"{group.asset_name}_{naming.sanitize_asset_name(mesh.name)}"
+            if node in node_names:
+                raise staging.StagingError(f"Duplicate FBX node name '{node}' (E008)")
+            node_names.append(node)
+            obj = st.stage_mesh(
+                mesh,
+                node,
+                anchor @ mesh.matrix_world,
+                role="RENDER" if index == 0 else "LOD",
+                triangulate=settings.triangulate,
+                keep_shape_keys=True,
+                armature=arm_obj,
+            )
+            n_trunc, n_unweighted = staging.limit_influences(obj, exported, settings.influence_limit, targets)
+            if n_trunc:
+                report.info(
+                    f"'{mesh.name}': {n_trunc} vertices had more than {settings.influence_limit} influences (I009)"
+                )
+            if n_unweighted:
+                report.warning(f"'{mesh.name}': {n_unweighted} vertices have no weights on exported bones (W021)")
+            names.append(node)
+        lod_nodes.append(names[0] if len(names) == 1 else (f"{group.asset_name}_LOD{index}", names))
+    entry["lods"] = len(levels)
     roots = [b.name for b in arm.data.bones if b.parent is None and b.name in exported]
     entry["root_bone"] = roots[0] if roots else ""
     if len(roots) != 1:
@@ -293,7 +325,7 @@ def _stage_skeletal_group(st, group, settings, node_names, report):
     entry["morph_targets"] = any(m.data.shape_keys is not None for m in group.render)
     entry["bone_axes"] = f"{default[0]}{default[1]}"
     entry["bone_axes_map"] = bones.serialize_axes_map(axes_map, default)
-    return [entry]
+    return [entry], (lod_nodes if len(levels) > 1 else [])
 
 
 def _stage_anim_group(st, group, settings, node_names, report):
@@ -467,7 +499,10 @@ def export_file(context, exported, settings, report):
                     exported.lod_specs.append((group.asset_name, lod_nodes))
             elif group.kind == KIND_SKELETAL:
                 bone_axes = bone_axes_for(group.armature, settings)
-                exported.assets.extend(_stage_skeletal_group(st, group, settings, node_names, report))
+                assets, lod_nodes = _stage_skeletal_group(st, group, settings, lod_mode, node_names, report)
+                exported.assets.extend(assets)
+                if lod_nodes:  # always a LOD group: skeletal sockets are bones, nothing inside the group gets lost
+                    exported.lod_specs.append((f"{group.asset_name}_LodGroup", lod_nodes))
                 exported.has_armature = True
             elif group.kind == KIND_ANIMATION:
                 bone_axes = bone_axes_for(group.armature, settings)

@@ -99,6 +99,99 @@ class SkeletalExportTests(unittest.TestCase):
         self.assertTrue(ok, leftovers)
         self.assertEqual(rig.data.bones["bone_01"].length, 30.0)  # user data untouched
 
+    def _copy(self, source, name, role, index=0, lod_of=None):
+        obj = source.copy()
+        obj.data = source.data.copy()
+        obj.name = name
+        fixtures.link(obj)
+        obj.morenn.role = role
+        if role == "LOD":
+            obj.morenn.lod_index, obj.morenn.lod_of = index, lod_of
+        return obj
+
+    def _skinned_geometries(self, root):
+        skins = {self.I.object_id(d) for d in self.I.find_objects(root, b"Deformer", subclass=b"Skin")}
+        return {parent for _k, child, parent, _p, _e in self.I.connections(root) if child in skins}
+
+    def test_lods_round_trip_as_one_lod_group(self):
+        """Both Unreal importers read the levels of an FBX LOD group by child position; a level may hold several
+        meshes under a null."""
+        rig, body = _rigged_character(shape_key=False)
+        head = self._copy(body, "Hero_Head", "RENDER")
+        self._copy(body, "Hero_Body_LOD1", "LOD", 1, body)
+        self._copy(body, "Hero_Body_LOD2", "LOD", 2, body)
+        self._copy(head, "Hero_Head_LOD2", "LOD", 2, head)
+        done, manifest_path, report = fixtures.run_export([rig], self.tmp)
+        self.assertTrue(report.ok, fixtures.report_text(report))
+        root, _ = fixtures.fbx_load(done[0].path)
+        self.assertEqual(
+            self.patches.lod_groups(root), [("SKM_Hero_LodGroup", ["SKM_Hero_LOD0", "SKM_Hero_LOD1", "SKM_Hero_LOD2"])]
+        )
+        levels = self.patches.lod_levels(root)
+        meshes = fixtures.fbx_models(root, b"Mesh")
+        self.assertEqual(
+            sorted((levels[name], name) for name in meshes),
+            [
+                (0, "SKM_Hero_Hero_Body_LOD0"),
+                (0, "SKM_Hero_Hero_Head_LOD0"),
+                (1, "SKM_Hero_LOD1"),
+                (2, "SKM_Hero_Hero_Body_LOD2"),
+                (2, "SKM_Hero_Hero_Head_LOD2"),
+            ],
+        )
+        skinned = self._skinned_geometries(root)
+        for name, model in meshes.items():
+            geometry = fixtures.fbx_geometry_for_model(root, model)
+            self.assertIn(self.I.object_id(geometry), skinned, name)
+        self.assertEqual(self.I.definition_count(root, b"Model"), len(self.I.find_objects(root, b"Model")))
+        ids = {self.I.object_id(e) for e in self.I.objects(root)} | {0}
+        for _kind, child, parent, _p, _e in self.I.connections(root):
+            self.assertIn(child, ids)
+            self.assertIn(parent, ids)
+        with open(manifest_path) as fh:
+            asset = json.load(fh)["items"][0]["assets"][0]
+        self.assertEqual((asset["meshes"], asset["lods"]), (2, 3))
+        # back into Blender: LOD objects again, and a re-export gives the same levels
+        fixtures.fresh_scene(cm=True)
+        prefs = fixtures.addon_module("prefs").get_prefs()
+        report = fixtures.addon_module("core.log").Report()
+        res = fixtures.addon_module("core.import_fbx").import_file(bpy.context, done[0].path, prefs, report)
+        got = sorted((o.morenn.lod_index if o.morenn.role == "LOD" else 0, o.name) for o in res.meshes)
+        self.assertEqual(
+            got,
+            [
+                (0, "SKM_Hero_Mesh"),
+                (0, "SKM_Hero_Mesh_1"),
+                (1, "SKM_Hero_LOD1"),
+                (2, "SKM_Hero_LOD2"),
+                (2, "SKM_Hero_LOD2_1"),
+            ],
+        )
+        self.assertFalse([o.name for o in bpy.data.objects if o.type == "EMPTY"])
+        again, _, report = fixtures.run_export(res.armatures, os.path.join(self.tmp, "again"))
+        self.assertTrue(report.ok, fixtures.report_text(report))
+        root, _ = fixtures.fbx_load(again[0].path)
+        counts = {}
+        for level in self.patches.lod_levels(root).values():
+            counts[level] = counts.get(level, 0) + 1
+        self.assertEqual(counts, {0: 3, 1: 1, 2: 3})  # nulls of the two-mesh levels included
+
+    def test_lods_left_out(self):
+        rig, body = _rigged_character(shape_key=False)
+        fixtures.make_cube("Hero_Body_LOD1", size=10.0)  # a LOD by its name, but not skinned
+        done, _, report = fixtures.run_export([rig], self.tmp)
+        self.assertTrue(report.ok, fixtures.report_text(report))
+        self.assertIn(
+            "'Hero_Body_LOD1': LOD1 of 'SKM_Hero' is not skinned to its armature", fixtures.report_text(report)
+        )
+        root, _ = fixtures.fbx_load(done[0].path)
+        self.assertEqual((self.patches.lod_groups(root), list(fixtures.fbx_models(root, b"Mesh"))), ([], ["SKM_Hero"]))
+        bpy.data.objects.remove(bpy.data.objects["Hero_Body_LOD1"])
+        self._copy(body, "Hero_Body_LOD1", "LOD", 1, body)
+        done, _, report = fixtures.run_export([rig], self.tmp, lod_mode="NONE")
+        self.assertIn("LOD objects ignored (LOD mode = NONE)", fixtures.report_text(report))
+        self.assertEqual(self.patches.lod_groups(fixtures.fbx_load(done[0].path)[0]), [])
+
     def test_blender_native_axes_keep_y_along_bone(self):
         rig, body = _rigged_character(shape_key=False)
         done, _, report = fixtures.run_export([rig], self.tmp, bone_primary="Y", bone_secondary="X")

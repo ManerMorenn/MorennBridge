@@ -219,28 +219,37 @@ def _lcl_identity_props(elem):
     )
 
 
-def inject_lod_groups(root, specs, thresholds_percent=None):
-    """``specs``: list of ``(group_name, [lod0_node_name, lod1_node_name, ...])``.
+def _model_like(root, name, subclass, template):
+    """A new Model at identity; its other children (version, shading, culling) are copied from ``template``."""
+    mid = I.new_id(root)
+    model = Elem(b"Model")
+    model.add_int64(mid).add_string(join_name_class(_b(name), b"Model")).add_string(subclass)
+    for child in template.elems:
+        if child.id != b"Properties70":
+            model.add(child.copy())
+    _lcl_identity_props(model)
+    return mid, model
 
-    Creates a ``LodGroup`` model + attribute per spec and re-parents the LOD models under it, in order.
+
+def inject_lod_groups(root, specs, thresholds_percent=None):
+    """``specs``: list of ``(group_name, levels)``. A level is a node name, or ``(null_name, [node names])`` for a
+    level made of several meshes, which then sit under a new null.
+
+    Creates a ``LodGroup`` model + attribute per spec and re-parents the levels under it in LOD order: both Unreal
+    importers take the child index as the LOD index.
     """
     result = PatchResult()
     models = {I.object_name(m): m for m in I.find_objects(root, b"Model")}
     objects = root.find(b"Objects")
-    for group_name, lod_names in specs:
-        lod_models = [models.get(_b(n)) for n in lod_names]
-        if any(m is None for m in lod_models) or len(lod_models) < 2:
+    for group_name, levels in specs:
+        levels = [(None, [level]) if isinstance(level, str) else (level[0], list(level[1])) for level in levels]
+        level_models = [[models.get(_b(n)) for n in names] for _null, names in levels]
+        if len(levels) < 2 or any(not ms or None in ms for ms in level_models):
             result.note(f"LOD group '{group_name}': nodes missing or fewer than two LODs; skipped")
             continue
-        gid, aid = I.new_id(root), I.new_id(root)
-        lod0 = lod_models[0]
-
-        group = Elem(b"Model")
-        group.add_int64(gid).add_string(join_name_class(_b(group_name), b"Model")).add_string(b"LodGroup")
-        for child in lod0.elems:
-            if child.id != b"Properties70":
-                group.add(child.copy())
-        _lcl_identity_props(group)
+        lod0 = level_models[0][0]
+        gid, group = _model_like(root, group_name, b"LodGroup", lod0)
+        aid = I.new_id(root)
         # without it FbxNode::GetNodeAttribute() is null and the legacy importer imports each LOD as a mesh
         I.set_prop(group, b"DefaultAttributeIndex", b"int", b"Integer", b"", 0, type_codes=(ord("I"),))
 
@@ -253,7 +262,7 @@ def inject_lod_groups(root, specs, thresholds_percent=None):
         I.set_prop(attr, b"WorldSpace", b"bool", b"", b"", 0, type_codes=(ord("I"),))
         I.set_prop(attr, b"ThresholdsUsedAsPercentage", b"bool", b"", b"", 1, type_codes=(ord("I"),))
         I.set_prop(attr, b"Thresholds", b"Compound", b"", b"")
-        n = len(lod_models)
+        n = len(levels)
         percents = thresholds_percent or [max(1.0, 100.0 / (2 ** (i + 1))) for i in range(n - 1)]
         for i in range(n - 1):
             I.set_prop(
@@ -274,18 +283,32 @@ def inject_lod_groups(root, specs, thresholds_percent=None):
         objects.elems.insert(insert_at, attr)
         objects.elems.insert(insert_at, group)
 
+        # the members leave their parent; the levels are connected to the group in LOD order
+        members = {I.object_id(m) for ms in level_models for m in ms}
         conns = I.connections_elem(root)
-        first_index = None
-        for lm in lod_models:
-            lid = I.object_id(lm)
-            for idx, c in enumerate(conns.elems):
-                if c.id == b"C" and len(c.props) >= 3 and c.props[0] == b"OO" and c.props[1] == lid and c.props[2] == 0:
-                    c.props[2] = gid
-                    if first_index is None:
-                        first_index = idx
-        I.add_connection(root, aid, gid, b"OO", index=first_index if first_index is not None else None)
-        I.add_connection(root, gid, 0, b"OO", index=first_index if first_index is not None else None)
-        I.definition_count(root, b"Model", +1)
+        parent_links = [
+            idx
+            for idx, c in enumerate(conns.elems)
+            if c.id == b"C" and len(c.props) >= 3 and c.props[0] == b"OO" and c.props[1] in members
+        ]
+        first_index = parent_links[0] if parent_links else len(conns.elems)
+        for idx in reversed(parent_links):
+            del conns.elems[idx]
+        links = [(aid, gid), (gid, 0)]
+        nulls = []
+        for (null_name, _names), ms in zip(levels, level_models):
+            ids = [I.object_id(m) for m in ms]
+            if null_name is None:
+                links.append((ids[0], gid))
+                continue
+            nid, null = _model_like(root, null_name, b"Null", lod0)
+            nulls.append(null)
+            links.append((nid, gid))
+            links.extend((mid, nid) for mid in ids)
+        objects.elems[insert_at + 2 : insert_at + 2] = nulls
+        for offset, (child, parent) in enumerate(links):
+            I.add_connection(root, child, parent, b"OO", index=first_index + offset)
+        I.definition_count(root, b"Model", +1 + len(nulls))
         I.definition_count(root, b"NodeAttribute", +1)
         result.changed = True
         result.note(f"LOD group '{group_name}' with {n} levels")
@@ -305,6 +328,29 @@ def model_tree(root):
     for m in I.find_objects(root, b"Model"):
         mid = I.object_id(m)
         out[mid] = (I.object_name(m).decode("utf-8", "replace"), I.object_subclass(m).decode(), parents.get(mid, 0))
+    return out
+
+
+def lod_levels(root):
+    """``{node name: LOD index}`` for the models under each LodGroup: a level's node and everything below it.
+
+    The index is the child position, as in both Unreal importers.
+    """
+    tree = model_tree(root)
+    kids = {}
+    for kind, child, parent, _prop, _e in I.connections(root):
+        if kind == b"OO" and child in tree and parent in tree:
+            kids.setdefault(parent, []).append(child)
+    out = {}
+    for mid, (_name, sub, _parent) in tree.items():
+        if sub != "LodGroup":
+            continue
+        for level, child in enumerate(kids.get(mid, [])):
+            stack = [child]
+            while stack:
+                node = stack.pop()
+                out[tree[node][0]] = level
+                stack.extend(kids.get(node, []))
     return out
 
 

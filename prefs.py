@@ -26,7 +26,11 @@ FILE_MODE_ITEMS = [
     ),
 ]
 LOD_MODE_ITEMS = [
-    ("AUTO", "Auto", "LOD naming for Interchange, LodGroup nodes for the legacy importer"),
+    (
+        "AUTO",
+        "Auto",
+        "LOD naming for Interchange, LodGroup nodes for the legacy importer (skeletal mesh LODs are always LodGroups)",
+    ),
     ("LOD_NAMING", "LOD<i>_Name nodes", "Interchange name pattern (no LodGroup node, zero risk)"),
     (
         "LODGROUP_NODES",

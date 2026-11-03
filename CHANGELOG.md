@@ -7,7 +7,7 @@ First public version. Requires Blender 4.5 or newer.
 - Scene setup for Unreal units (1 unit = 1 cm) and conversion of existing metre scenes, including constraint and
   metaball lengths.
 - Static mesh, skeletal mesh and animation export with Unreal's axis convention, centimetres, smoothing groups,
-  tangents, collision/socket/LOD naming, generated collision meshes and a JSON manifest.
+  tangents, collision/socket/LOD naming, skeletal mesh LODs, generated collision meshes and a JSON manifest.
 - Curves, surfaces, text, metaballs, Geometry Nodes instances and collection instances export as meshes.
 - Import of Unreal FBX exports, binary or ASCII: root bone restored, per-bone axis conversion, bone lengths,
   hierarchy clean-up.

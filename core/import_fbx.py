@@ -23,6 +23,7 @@ class ImportInfo:
     marker_axes_map: str = ""
     root_bones: list = field(default_factory=list)
     lod_groups: list = field(default_factory=list)
+    lod_levels: dict = field(default_factory=dict)  # node name -> LOD index, for everything under a LOD group
     anim_stacks: list = field(default_factory=list)
     anim_ranges: list = field(default_factory=list)  # (start, stop) seconds per stack, None when not stored
     has_skin: bool = False
@@ -72,6 +73,7 @@ def analyze(root):
     info.marker_axes_map = patches.get_globalsettings_string(root, MARKER_AXES_MAP) or ""
     info.root_bones = patches.root_bone_names(root)
     info.lod_groups = patches.lod_groups(root)
+    info.lod_levels = patches.lod_levels(root)
     stacks = I.anim_stacks(root)
     info.anim_stacks = [I.object_name(s).decode("utf-8", "replace") for s in stacks]
     info.anim_ranges = [_stack_range(s) for s in stacks]
@@ -306,44 +308,41 @@ def _rename_actions(result, stem, report):
             report.info(f"Action renamed to '{action.name}'")
 
 
-def _lod_indices(info):
-    """``{node name: LOD index}`` for the children of the file's LOD groups (name suffix first, else child order)."""
-    out = {}
-    for _group, children in info.lod_groups:
-        for position, child in enumerate(children):
-            parsed = naming.parse_lod_name(child)
-            out[child] = parsed[1] if parsed else position
-    return out
-
-
 def _tidy(context, result, stem, report):
     info = result.info
     base_asset = naming.sanitize_asset_name(stem)
-    # skeletal layout: armature named after the asset, meshes <asset>_Mesh
-    if result.armatures:
-        arm = result.armatures[0]
-        skinned = [m for m in result.meshes if any(md.type == "ARMATURE" and md.object == arm for md in m.modifiers)]
-        lod_index = _lod_indices(info)
-        meshes = [m for m in skinned if lod_index.get(naming.strip_numeric_suffix(m.name), 0) == 0]
-        lods = [(lod_index[naming.strip_numeric_suffix(m.name)], m) for m in skinned if m not in meshes]
-        for i, mesh in enumerate(meshes):  # meshes first: the UE mesh node carries the asset name
-            mesh.name = f"{base_asset}_Mesh" if i == 0 else f"{base_asset}_Mesh_{i}"
-            mesh.data.name = mesh.name
-            mesh.morenn.export_name = naming.strip_known_prefix(base_asset, ["SM_", "SKM_", "SK_"])[0]
-        for index, mesh in sorted(lods, key=lambda pair: pair[0]):
-            mesh.name = mesh.data.name = f"{base_asset}_LOD{index}"
-            mesh.morenn.role, mesh.morenn.lod_index = "LOD", index
-            mesh.morenn.lod_of = meshes[0] if meshes else None
-        if lods:
-            report.info(f"'{base_asset}': LOD{'/'.join(str(i) for i, _ in sorted(lods))} kept as LOD objects")
-        if arm.name != base_asset:
-            arm.name = base_asset
-            arm.data.name = base_asset
-    # UE helper nulls (attribute-less parents) without children or data
+    # UE helper nulls (attribute-less parents) and emptied LOD group nodes, first: they hold names used below
     for obj in list(result.objects):
         if obj.type == "EMPTY" and not obj.children and not naming.is_socket_name(obj.name):
             bpy.data.objects.remove(obj, do_unlink=True)
             result.objects.remove(obj)
+    # skeletal layout: armature named after the asset, meshes <asset>_Mesh, LOD meshes <asset>_LOD<i>
+    if result.armatures:
+        arm = result.armatures[0]
+        skinned = [m for m in result.meshes if any(md.type == "ARMATURE" and md.object == arm for md in m.modifiers)]
+
+        def level(mesh):
+            return info.lod_levels.get(naming.strip_numeric_suffix(mesh.name), 0)
+
+        meshes = [m for m in skinned if level(m) == 0]
+        lods = sorted(((level(m), m) for m in skinned if m not in meshes), key=lambda pair: pair[0])
+        for i, mesh in enumerate(meshes):  # meshes first: the UE mesh node carries the asset name
+            mesh.name = f"{base_asset}_Mesh" if i == 0 else f"{base_asset}_Mesh_{i}"
+            mesh.data.name = mesh.name
+            mesh.morenn.export_name = naming.strip_known_prefix(base_asset, ["SM_", "SKM_", "SK_"])[0]
+        per_level = {}
+        for index, mesh in lods:
+            count = per_level[index] = per_level.get(index, 0) + 1
+            mesh.name = mesh.data.name = (
+                f"{base_asset}_LOD{index}" if count == 1 else f"{base_asset}_LOD{index}_{count - 1}"
+            )
+            mesh.morenn.role, mesh.morenn.lod_index = "LOD", index
+            mesh.morenn.lod_of = meshes[0] if meshes else None
+        if lods:
+            report.info(f"'{base_asset}': LOD{'/'.join(str(i) for i in sorted(per_level))} kept as LOD objects")
+        if arm.name != base_asset:
+            arm.name = base_asset
+            arm.data.name = base_asset
     # static LOD groups exported by Unreal: empty <Name> with <Name>_LOD<i> children (skinned LODs are done above)
     by_name = {o.name: o for o in result.objects}
     for group_name, children in info.lod_groups:

@@ -17,6 +17,7 @@ See the [user guide](USER_GUIDE.md) for the panel-by-panel walkthrough.
 | Generated collision mesh | *Generate collision mesh* checkbox | `SM_Crate_COLL` (separate asset; assign it as **Complex Collision Mesh** on `SM_Crate`) |
 | Socket | child empty `SOCKET_Lid` | `SOCKET_Lid` (child of the mesh node) |
 | LOD | `Crate_LOD1`, `Crate_LOD2` (or role = LOD + index) | Interchange: `LOD0_SM_Crate`, `LOD1_SM_Crate`; legacy: LodGroup `SM_Crate` with `SM_Crate_LOD0`… |
+| Skeletal mesh LOD | `Body_LOD1` … skinned to the same armature (or role = LOD + index) | LodGroup `SKM_Hero_LodGroup` with `SKM_Hero_LOD0`, `SKM_Hero_LOD1`… for both importers; a level with several meshes is a node holding them |
 | Animation | action `Run` on armature `Hero` | `A_Hero_Run` |
 
 Prefixes are stripped before being re-applied (`SM_Crate` does not become `SM_SM_Crate`); `.001` suffixes are removed; ASCII punctuation (`.`, space, `/`, …) is replaced, accents and non-Latin letters are kept. Use *Export name* on the object to override the base name.
@@ -67,10 +68,10 @@ Each item:
 | `destination_path` | Unreal folder for the assets |
 | `single_asset` | True when the file yields one asset, named after the file |
 | `assets` | The assets inside the file, see below |
-| `lod_mode` | `LOD_NAMING` or `LODGROUP_NODES` |
+| `lod_mode` | `LOD_NAMING` or `LODGROUP_NODES` (static meshes; skeletal LODs are always a LodGroup) |
 | `bone_axes`, `bone_axes_map` | Bone convention and per-bone exceptions (skeletal and animation files) |
 | `skeleton`, `root_bone`, `morph_targets`, `source_armature` | Skeletal and animation files |
 | `fps`, `frame_start`, `frame_end`, `stack` | Animation files |
 | `ue_settings` | Animation files of an action pulled from Unreal: the asset settings FBX cannot hold, as Pull recorded them (property name to value, enums by name, assets by path). Set on the new asset after the import |
 
-Each asset has `node` (the FBX node) and `name` (the Unreal asset). Static meshes add `lods`, `collisions`, `sockets`, and `collision_mesh` with `collision_ratio` when a collision mesh was generated. Generated collision meshes have `role` set to `COLLISION_MESH`. Skeletal meshes add `meshes` and `bones`.
+Each asset has `node` (the FBX node) and `name` (the Unreal asset). Static meshes add `lods`, `collisions`, `sockets`, and `collision_mesh` with `collision_ratio` when a collision mesh was generated. Generated collision meshes have `role` set to `COLLISION_MESH`. Skeletal meshes add `meshes` (in LOD0), `lods` and `bones`.
