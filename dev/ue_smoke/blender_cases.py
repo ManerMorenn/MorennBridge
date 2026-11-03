@@ -264,6 +264,19 @@ def case_animation(smoke, name, fps, start, end):
     smoke.add(name, 6, [mesh, anim], expect)
 
 
+def case_shading(smoke):
+    """Imported normals: a sphere shaded smooth stays smooth, flat faces and sharp edges stay hard."""
+    fixtures.fresh_scene(cm=True)
+    smooth = fixtures.make_sphere("SmoothBall", radius=25.0)
+    for polygon in smooth.data.polygons:
+        polygon.use_smooth = True
+    flat = fixtures.make_sphere("FlatBall", radius=25.0, location=(60, 0, 0))
+    crate = fixtures.make_cube("SharpCrate", size=40.0, location=(120, 0, 0))
+    manifest = smoke.export("shading", "export", [smooth, flat, crate])
+    expect = {"shading": {"SM_SmoothBall": "smooth", "SM_FlatBall": "flat", "SM_SharpCrate": "flat"}}
+    smoke.add("shading", 1, [manifest], expect)
+
+
 def srgb_to_linear(value):
     return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
 
@@ -370,6 +383,7 @@ CASES = (
     lambda smoke: case_animation(smoke, "anim_30fps", 30, 0, 30),
     lambda smoke: case_animation(smoke, "anim_24fps", 24, 1, 24),
     case_vertex_colours,
+    case_shading,
 )
 
 

@@ -198,23 +198,50 @@ def srgb_byte(value):
     return int(round(min(max(value, 0.0), 1.0) * 255))
 
 
-def mesh_colours(mesh, lod_type):
-    options = unreal.GeometryScriptCopyMeshFromAssetOptions()
-    lod = unreal.GeometryScriptMeshReadLOD()
-    lod.set_editor_property("lod_type", lod_type)
-    dynamic, _outcome = unreal.GeometryScript_AssetUtils.copy_mesh_from_static_mesh(
-        mesh, unreal.DynamicMesh(), options, lod
-    )
+def mesh_colours(mesh):
+    dynamic = copy_to_dynamic_mesh(mesh)
     _mesh, colours, valid, _gaps = unreal.GeometryScript_VertexColors.get_mesh_per_vertex_colors(dynamic, False)
     values = unreal.GeometryScript_List.convert_color_list_to_array(colours)
     return valid, sorted({(srgb_byte(c.r), srgb_byte(c.g), srgb_byte(c.b)) for c in values})
+
+
+def copy_to_dynamic_mesh(mesh):
+    """LOD0 of a static mesh, as imported (source model)."""
+    options = unreal.GeometryScriptCopyMeshFromAssetOptions()
+    lod = unreal.GeometryScriptMeshReadLOD()
+    lod.set_editor_property("lod_type", unreal.GeometryScriptLODType.SOURCE_MODEL)
+    dynamic, _outcome = unreal.GeometryScript_AssetUtils.copy_mesh_from_static_mesh(
+        mesh, unreal.DynamicMesh(), options, lod
+    )
+    return dynamic
+
+
+def degrees_between(a, b):
+    length = math.sqrt(a.dot(a) * b.dot(b))
+    return math.degrees(math.acos(max(-1.0, min(1.0, a.dot(b) / length)))) if length else 180.0
+
+
+def check_shading(case, name, mode):
+    """``smooth``: corner normals point away from the centre (a sphere at its pivot); ``flat``: equal the face's."""
+    mesh = case.load(name)
+    if not case.check(isinstance(mesh, unreal.StaticMesh), f"{name} is a static mesh", type(mesh).__name__):
+        return
+    dynamic = copy_to_dynamic_mesh(mesh)
+    worst = 0.0
+    for triangle in range(dynamic.get_triangle_count()):
+        _valid, *corners = dynamic.get_triangle_positions(triangle)
+        normals = [v for v in dynamic.get_triangle_normals(triangle) if isinstance(v, unreal.Vector)]
+        face, _ok = dynamic.get_triangle_face_normal(triangle)
+        for corner, normal in zip(corners, normals):
+            worst = max(worst, degrees_between(normal, corner if mode == "smooth" else face))
+    case.check(worst < 1.0, f"{name}: {mode} shading", f"largest normal deviation {worst:.3f} deg")
 
 
 def check_vertex_colours(case, name, expected):
     mesh = case.load(name)
     if not case.check(isinstance(mesh, unreal.StaticMesh), f"{name} is a static mesh", type(mesh).__name__):
         return
-    valid, got = mesh_colours(mesh, unreal.GeometryScriptLODType.SOURCE_MODEL)
+    valid, got = mesh_colours(mesh)
     wanted = sorted(tuple(c) for c in expected)
     same = len(got) == len(wanted) and all(close(a, b, 1) for a, b in zip(got, wanted))
     case.check(valid and same, f"{name}: vertex colours (8-bit sRGB)", f"{got}, expected {wanted}")
@@ -333,6 +360,8 @@ def run_case(data, root):
         check_animation(case, name, e)
     for name, e in exp.get("vertex_colours", {}).items():
         check_vertex_colours(case, name, e)
+    for name, e in exp.get("shading", {}).items():
+        check_shading(case, name, e)
     for name, e in exp.get("compare_skeletal", {}).items():
         compare_skeletal(case, name, e)
     for name, e in exp.get("compare_animations", {}).items():

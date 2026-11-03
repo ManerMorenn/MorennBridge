@@ -39,9 +39,9 @@ to `<Project>/Intermediate/PythonStub/unreal.py`, and `python dev/check_ue_names
 
 `python dev/ue_smoke/run.py --blender <blender> --editor <UnrealEditor-Cmd> --project <test.uproject> [--roundtrip]`
 exports test scenes with the add-on, imports them into a test project with `ue/scripts` (no editor window) and
-checks names, LODs, collision, sockets, skeletons, animations and vertex colours with Unreal's Python. `--roundtrip`
-also sends the Third Person template's mannequin through Blender and back. Use a project made for testing: the run
-replaces `/Game/MorennBridgeSmoke`.
+checks names, LODs, collision, sockets, shading, skeletons, animations and vertex colours with Unreal's Python.
+`--roundtrip` also sends the Third Person template's mannequin through Blender and back. Use a project made for
+testing: the run replaces `/Game/MorennBridgeSmoke`.
 
 ## Versions
 
