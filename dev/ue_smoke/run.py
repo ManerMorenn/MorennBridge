@@ -27,6 +27,9 @@ def run_unreal(args, stage, env_extra, log_name):
     env = dict(os.environ, MB_SMOKE_STAGE=stage, **env_extra)
     script = os.path.join(HERE, "unreal_checks.py")
     flags = "-unattended -nosplash -nop4 -NoSound -stdout -FullStdOutLogOutput"
+    if stage == "export":
+        # the skeletal mesh FBX exporter needs a rendered component, even with material baking off
+        flags += " -AllowCommandletRendering"
     if os.name == "nt":
         command = f'"{args.editor}" "{args.project}" -run=pythonscript -script="{script}" {flags}'
     else:
@@ -60,14 +63,15 @@ def report(results_path):
     failed = 0
     print(f"[smoke] {results['engine']}")
     for case in results["cases"]:
-        bad = [r for r in case["results"] if not r["ok"]]
+        checks = [r for r in case["results"] if r["ok"] is not None]
+        bad = [r for r in checks if not r["ok"]]
         failed += len(bad)
-        print(
-            f"\n{case['name']} (checklist item {case['item']}): {len(case['results']) - len(bad)}/{len(case['results'])} ok"
-        )
+        print(f"\n{case['name']} (checklist item {case['item']}): {len(checks) - len(bad)}/{len(checks)} ok")
         for r in case["results"]:
-            detail = f": {r['detail']}" if r["detail"] and (not r["ok"] or os.environ.get("MB_SMOKE_VERBOSE")) else ""
-            print(f"  {'ok  ' if r['ok'] else 'FAIL'} {r['check']}{detail}")
+            label = "note" if r["ok"] is None else ("ok  " if r["ok"] else "FAIL")
+            shown = r["detail"] and (r["ok"] is not True or os.environ.get("MB_SMOKE_VERBOSE"))
+            detail = f": {r['detail']}" if shown else ""
+            print(f"  {label} {r['check']}{detail}")
     print(f"\n[smoke] {failed} failed check(s)")
     return failed
 

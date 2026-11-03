@@ -37,6 +37,12 @@ these scripts against `tests/fake_unreal.py`. Every Unreal name they use, and ev
 in the editor's Python stub: with *Developer Mode* on (Editor Preferences → Plugins → Python), the editor writes it
 to `<Project>/Intermediate/PythonStub/unreal.py`, and `python dev/check_ue_names.py <stub>` compares.
 
+`python dev/ue_smoke/run.py --blender <blender> --editor <UnrealEditor-Cmd> --project <test.uproject> [--roundtrip]`
+exports test scenes with the add-on, imports them into a test project with `ue/scripts` (no editor window) and
+checks names, LODs, collision, sockets, skeletons, animations and vertex colours with Unreal's Python. `--roundtrip`
+also sends the Third Person template's mannequin through Blender and back. Use a project made for testing: the run
+replaces `/Game/MorennBridgeSmoke`.
+
 ## Versions
 
 The version follows [semantic versioning](https://semver.org) and lives in `__init__.py` and `blender_manifest.toml`,

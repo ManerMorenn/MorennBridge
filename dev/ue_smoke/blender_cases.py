@@ -264,6 +264,104 @@ def case_animation(smoke, name, fps, start, end):
     smoke.add(name, 6, [mesh, anim], expect)
 
 
+def srgb_to_linear(value):
+    return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+
+
+def coloured_cube(name, location, domain_type, colours):
+    """Cube with one colour attribute; ``colours``: one sRGB byte triple, or one per face (faces split apart)."""
+    import bmesh
+
+    obj = fixtures.make_cube(name, size=20.0, location=location, color=False)
+    if len(colours) > 1:
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bmesh.ops.split_edges(bm, edges=bm.edges[:])
+        bm.to_mesh(obj.data)
+        bm.free()
+    data_type, domain = domain_type
+    attribute = obj.data.color_attributes.new("Col", data_type, domain)
+    obj.data.color_attributes.active_color = attribute
+    for polygon in obj.data.polygons:
+        rgb = colours[polygon.index % len(colours)]
+        for loop_index in polygon.loop_indices:
+            index = loop_index if domain == "CORNER" else obj.data.loops[loop_index].vertex_index
+            if data_type == "BYTE_COLOR":
+                attribute.data[index].color_srgb = (*(c / 255 for c in rgb), 1.0)
+            else:
+                attribute.data[index].color = (*(srgb_to_linear(c / 255) for c in rgb), 1.0)
+    return obj
+
+
+def case_vertex_colours(smoke):
+    """Item 8: a colour painted in Blender comes out as the same 8-bit sRGB colour in Unreal, with both importers."""
+    for name, importer in (("vertex_colours", "INTERCHANGE"), ("vertex_colours_legacy", "LEGACY")):
+        fixtures.fresh_scene(cm=True)
+        grey = [(128, 128, 128)]
+        swatch = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (64, 64, 64), (200, 100, 50), (10, 20, 30)]
+        cubes = {
+            "SM_GreyByte": (coloured_cube("GreyByte", (0, 0, 0), ("BYTE_COLOR", "CORNER"), grey), grey),
+            "SM_GreyFloat": (coloured_cube("GreyFloat", (40, 0, 0), ("FLOAT_COLOR", "POINT"), grey), grey),
+            "SM_Swatch": (coloured_cube("Swatch", (80, 0, 0), ("BYTE_COLOR", "CORNER"), swatch), swatch),
+        }
+        manifest = smoke.export(name, "export", [obj for obj, _ in cubes.values()], ue_importer=importer)
+        expect = {"vertex_colours": {asset: [list(c) for c in colours] for asset, (_obj, colours) in cubes.items()}}
+        smoke.add(name, 8, [manifest], expect)
+
+
+def file_fps(path):
+    """Frame rate stored in an FBX file's global settings."""
+    inspect = fixtures.addon_module("fbxpatch.inspect")
+    root, _version = fixtures.fbx_load(path)
+    settings = root.find(b"GlobalSettings")
+    rate = inspect.prop_values(settings, b"CustomFrameRate") if settings is not None else None
+    if rate and rate[0] > 0:
+        return float(rate[0])
+    modes = {6: 30.0, 11: 24.0, 10: 25.0, 3: 60.0}
+    mode = inspect.prop_values(settings, b"TimeMode") if settings is not None else None
+    return modes.get(mode[0], 30.0) if mode else 30.0
+
+
+def import_unreal_file(path):
+    prefs = fixtures.addon_module("prefs").get_prefs()
+    report = fixtures.addon_module("core.log").Report("smoke import")
+    result = fixtures.addon_module("core.import_fbx").import_file(bpy.context, path, prefs, report)
+    if not report.ok:
+        raise RuntimeError(f"import of {path} failed: {fixtures.report_text(report)}")
+    return result
+
+
+def case_mannequin(smoke, ue_export):
+    """Items 5 and 6: the template mannequin and two animations, exported by Unreal, through Blender and back."""
+    with open(os.path.join(ue_export, "pull.result.json"), encoding="utf-8") as fh:
+        pulled = {os.path.basename(i["file"])[:-4]: i for i in json.load(fh)["items"] if i.get("success")}
+    original = pulled["SKM_Manny_Simple"]["asset_path"]
+    scene = fixtures.fresh_scene(cm=True)
+    rig = import_unreal_file(pulled["SKM_Manny_Simple"]["file"]).armatures[0]
+    bones = [b.name for b in rig.data.bones]  # the mesh's own bones, as Unreal exported them
+    own_skeleton = smoke.export("mannequin", "mesh", [rig])
+    rig.data.morenn.ue_skeleton_path = MANNEQUIN_SKELETON
+    on_skeleton = smoke.export("mannequin_on_skeleton", "mesh", [rig])
+    compare = {"reference": original, "skeleton": "SKEL_Manny_Simple", "bones": bones}
+    smoke.add("mannequin", 5, [own_skeleton], {"compare_skeletal": {"SKM_Manny_Simple": compare}})
+    anims = {}
+    manifests = [on_skeleton]
+    for stem in ("MM_Idle", "MF_Unarmed_Jog_Fwd"):
+        path = pulled[stem]["file"]
+        scene = fixtures.fresh_scene(cm=True)
+        scene.render.fps = int(round(file_fps(path)))
+        rig = import_unreal_file(path).armatures[0]
+        rig.name = "Manny"
+        rig.data.morenn.ue_skeleton_path = MANNEQUIN_SKELETON
+        manifests.append(smoke.export("mannequin_on_skeleton", stem, [rig], mode="ANIMATION"))
+        anims[f"A_Manny_{stem}"] = {"reference": pulled[stem]["asset_path"]}
+    expect = {
+        "compare_skeletal": {"SKM_Manny_Simple": dict(compare, skeleton=MANNEQUIN_SKELETON)},
+        "compare_animations": anims,
+    }
+    smoke.add("mannequin_on_skeleton", 6, manifests, expect)
+
+
 CASES = (
     case_combined,
     case_single_file_collision,
@@ -271,6 +369,7 @@ CASES = (
     case_skeletal,
     lambda smoke: case_animation(smoke, "anim_30fps", 30, 0, 30),
     lambda smoke: case_animation(smoke, "anim_24fps", 24, 1, 24),
+    case_vertex_colours,
 )
 
 
@@ -279,7 +378,10 @@ def main():
     out_dir, content_root = argv[0], argv[1]
     smoke = Smoke(out_dir, content_root)
     failed = []
-    for build in CASES:
+    cases = list(CASES)
+    if len(argv) > 2:
+        cases.append(lambda smoke: case_mannequin(smoke, argv[2]))
+    for build in cases:
         try:
             build(smoke)
         except Exception:

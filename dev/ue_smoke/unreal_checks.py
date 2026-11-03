@@ -8,6 +8,7 @@ MB_SMOKE_STAGE=check    imports the cases listed in MB_SMOKE_CASES with mb_ue_im
 
 import importlib
 import json
+import math
 import os
 import sys
 import traceback
@@ -23,6 +24,7 @@ LIB = unreal.EditorAssetLibrary
 POSE = unreal.AnimPoseExtensions
 WORLD = unreal.AnimPoseSpaces.WORLD
 LOCAL = unreal.AnimPoseSpaces.LOCAL
+ASSET_ONLY_SETTINGS = ("retarget_source_asset", "retarget_source", "enable_root_motion", "force_root_lock")
 MANNEQUIN = (
     "/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple",
     "/Game/Characters/Mannequins/Anims/Unarmed/MM_Idle",
@@ -52,6 +54,9 @@ class Case:
     def check(self, ok, what, detail=""):
         self.results.append({"ok": bool(ok), "check": what, "detail": str(detail)})
         return bool(ok)
+
+    def note(self, what, detail):
+        self.results.append({"ok": None, "check": what, "detail": str(detail)})
 
     def load(self, name):
         return unreal.load_asset(f"{self.folder}/{name}")
@@ -188,6 +193,124 @@ def check_animation(case, name, exp):
         case.check(worst < 0.05, f"{name}: bone positions at frame {frame}", f"largest difference {worst:.4f} cm")
 
 
+def srgb_byte(value):
+    """GeometryScript copies vertex colours in sRGB (FMeshDescriptionToDynamicMesh converts them), as FColor stores."""
+    return int(round(min(max(value, 0.0), 1.0) * 255))
+
+
+def mesh_colours(mesh, lod_type):
+    options = unreal.GeometryScriptCopyMeshFromAssetOptions()
+    lod = unreal.GeometryScriptMeshReadLOD()
+    lod.set_editor_property("lod_type", lod_type)
+    dynamic, _outcome = unreal.GeometryScript_AssetUtils.copy_mesh_from_static_mesh(
+        mesh, unreal.DynamicMesh(), options, lod
+    )
+    _mesh, colours, valid, _gaps = unreal.GeometryScript_VertexColors.get_mesh_per_vertex_colors(dynamic, False)
+    values = unreal.GeometryScript_List.convert_color_list_to_array(colours)
+    return valid, sorted({(srgb_byte(c.r), srgb_byte(c.g), srgb_byte(c.b)) for c in values})
+
+
+def check_vertex_colours(case, name, expected):
+    mesh = case.load(name)
+    if not case.check(isinstance(mesh, unreal.StaticMesh), f"{name} is a static mesh", type(mesh).__name__):
+        return
+    valid, got = mesh_colours(mesh, unreal.GeometryScriptLODType.SOURCE_MODEL)
+    wanted = sorted(tuple(c) for c in expected)
+    same = len(got) == len(wanted) and all(close(a, b, 1) for a, b in zip(got, wanted))
+    case.check(valid and same, f"{name}: vertex colours (8-bit sRGB)", f"{got}, expected {wanted}")
+
+
+def angle_between(a, b):
+    """Degrees between two rotations (unreal.Quat)."""
+    dot = abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w)
+    return math.degrees(2.0 * math.acos(min(1.0, dot)))
+
+
+def pose_difference(pose, reference, bones, use_reference_pose=False):
+    """Largest position (cm) and rotation (degrees) difference over ``bones``, in component space."""
+    get = POSE.get_ref_bone_pose if use_reference_pose else POSE.get_bone_pose
+    worst = (0.0, "", 0.0, "")
+    for bone in bones:
+        a, b = get(pose, bone, WORLD), get(reference, bone, WORLD)
+        distance = max(abs(x - y) for x, y in zip(vec(a.translation), vec(b.translation)))
+        angle = angle_between(a.rotation, b.rotation)
+        worst = (
+            max(worst[0], distance),
+            bone if distance >= worst[0] else worst[1],
+            max(worst[2], angle),
+            bone if angle >= worst[2] else worst[3],
+        )
+    return worst
+
+
+def compare_skeletal(case, name, exp):
+    mesh, reference = case.load(name), unreal.load_asset(exp["reference"])
+    if not case.check(isinstance(mesh, unreal.SkeletalMesh), f"{name} is a skeletal mesh", type(mesh).__name__):
+        return
+    skeleton = mesh.get_editor_property("skeleton")
+    got = skeleton.get_path_name().split(".")[0] if skeleton else None
+    expected = exp["skeleton"] if exp["skeleton"].startswith("/") else f"{case.folder}/{exp['skeleton']}"
+    case.check(got == expected, f"{name}: skeleton", got)
+    ref_skeleton = reference.get_editor_property("skeleton")
+    pose, ref_pose = POSE.get_reference_pose(skeleton), POSE.get_reference_pose(ref_skeleton)
+    shared = exp["bones"]  # the original mesh's bones; a shared skeleton may hold more
+    if skeleton != ref_skeleton:
+        bones = [str(n) for n in POSE.get_bone_names(pose)]
+        missing, extra = sorted(set(shared) - set(bones)), sorted(set(bones) - set(shared))
+        case.check(
+            not (missing or extra), f"{name}: same bones as the original mesh", f"missing {missing}, extra {extra}"
+        )
+    parents = [b for b in shared if str(mesh.get_bone_parent(b)) != str(reference.get_bone_parent(b))]
+    case.check(not parents, f"{name}: same parents", parents[:5])
+    if skeleton != ref_skeleton:
+        distance, at, angle, at_angle = pose_difference(pose, ref_pose, shared, use_reference_pose=True)
+        case.check(distance < 0.01, f"{name}: rest positions", f"largest difference {distance:.5f} cm ({at})")
+        case.check(angle < 0.01, f"{name}: rest rotations", f"largest difference {angle:.5f} deg ({at_angle})")
+    bounds, ref_bounds = mesh.get_imported_bounds(), reference.get_imported_bounds()
+    got = vec(bounds.origin) + vec(bounds.box_extent)
+    wanted = vec(ref_bounds.origin) + vec(ref_bounds.box_extent)
+    case.check(close(got, wanted, 0.1), f"{name}: bounds", f"{got}, original {wanted}")
+    slots = len(mesh.get_editor_property("materials"))
+    ref_slots = len(reference.get_editor_property("materials"))
+    case.check(slots == ref_slots, f"{name}: material slots", f"{slots}, original {ref_slots}")
+
+
+def compare_animation(case, name, exp):
+    anim, reference = case.load(name), unreal.load_asset(exp["reference"])
+    if not case.check(isinstance(anim, unreal.AnimSequence), f"{name} is an animation", type(anim).__name__):
+        return
+    skeleton = anim.get_editor_property("skeleton")
+    ref_skeleton = reference.get_editor_property("skeleton")
+    case.check(
+        skeleton == ref_skeleton, f"{name}: on the original skeleton", short(skeleton and skeleton.get_path_name())
+    )
+    keys, ref_keys = unreal.AnimationLibrary.get_num_keys(anim), unreal.AnimationLibrary.get_num_keys(reference)
+    case.check(keys == ref_keys, f"{name}: keys", f"{keys}, original {ref_keys}")
+    length, ref_length = anim.get_play_length(), reference.get_play_length()
+    case.check(abs(length - ref_length) < 1e-4, f"{name}: length", f"{length:.5f} s, original {ref_length:.5f}")
+    lost = {}
+    for setting in ASSET_ONLY_SETTINGS:  # not in FBX: copied here (not saved) so poses compare like for like
+        value = reference.get_editor_property(setting)
+        if anim.get_editor_property(setting) != value:
+            lost[setting] = value.get_name() if hasattr(value, "get_name") else value
+            anim.set_editor_property(setting, value)
+    case.note(f"{name}: Unreal asset settings the round trip loses", lost or "none")
+    options = unreal.AnimPoseEvaluationOptions()
+    # Unreal's FBX export holds the preview mesh's bones only; the others cannot come back
+    bones = [str(n) for n in unreal.AnimationLibrary.get_animation_track_names(anim)]
+    case.check(bones, f"{name}: bone tracks", f"{len(bones)} tracks")
+    for frame in sorted({0, ref_keys // 2, ref_keys - 1}):
+        pose = POSE.get_anim_pose_at_frame(anim, frame, options)
+        ref_pose = POSE.get_anim_pose_at_frame(reference, frame, options)
+        distance, at, angle, at_angle = pose_difference(pose, ref_pose, bones)
+        case.check(
+            distance < 0.05, f"{name}: positions at frame {frame}", f"largest difference {distance:.4f} cm ({at})"
+        )
+        case.check(
+            angle < 0.05, f"{name}: rotations at frame {frame}", f"largest difference {angle:.4f} deg ({at_angle})"
+        )
+
+
 def run_case(data, root):
     folder = f"{root}/{data['name']}"
     case = Case(data, folder)
@@ -208,6 +331,12 @@ def run_case(data, root):
         check_skeletal(case, name, e)
     for name, e in exp.get("animations", {}).items():
         check_animation(case, name, e)
+    for name, e in exp.get("vertex_colours", {}).items():
+        check_vertex_colours(case, name, e)
+    for name, e in exp.get("compare_skeletal", {}).items():
+        compare_skeletal(case, name, e)
+    for name, e in exp.get("compare_animations", {}).items():
+        compare_animation(case, name, e)
     classes = asset_classes(folder)
     for name in exp.get("absent", []):
         case.check(classes.get(name) in (None, "ObjectRedirector"), f"no asset left as {name}", classes.get(name))
