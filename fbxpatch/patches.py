@@ -241,6 +241,8 @@ def inject_lod_groups(root, specs, thresholds_percent=None):
             if child.id != b"Properties70":
                 group.add(child.copy())
         _lcl_identity_props(group)
+        # without it FbxNode::GetNodeAttribute() is null and the legacy importer imports each LOD as a mesh
+        I.set_prop(group, b"DefaultAttributeIndex", b"int", b"Integer", b"", 0, type_codes=(ord("I"),))
 
         attr = Elem(b"NodeAttribute")
         attr.add_int64(aid).add_string(join_name_class(_b(group_name) + b"_LodGroup", b"NodeAttribute"))

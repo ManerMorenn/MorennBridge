@@ -122,6 +122,8 @@ class StaticExportTests(unittest.TestCase):
         groups = self.patches.lod_groups(root)
         self.assertEqual(groups, [("SM_Crate", ["SM_Crate_LOD0", "SM_Crate_LOD1", "SM_Crate_LOD2"])])
         self.assertEqual(self.I.definition_count(root, b"Model"), len(self.I.find_objects(root, b"Model")))
+        group_model = fixtures.fbx_models(root, b"LodGroup")["SM_Crate"]
+        self.assertEqual(self.I.prop_values(group_model, b"DefaultAttributeIndex"), [0])
         # Blender's own (ufbx) importer must accept the patched file
         fixtures.fresh_scene(cm=True)
         compat = fixtures.addon_module("compat")
