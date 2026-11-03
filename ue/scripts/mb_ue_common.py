@@ -104,13 +104,6 @@ def save_asset(asset):
         warn(f"Could not save {asset.get_name()}: {exc}")
 
 
-def list_assets(folder, recursive=False):
-    try:
-        return list(unreal.EditorAssetLibrary.list_assets(folder, recursive=recursive, include_folder=False))
-    except Exception:
-        return []
-
-
 def load(path):
     try:
         return unreal.load_asset(path)

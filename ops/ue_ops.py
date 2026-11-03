@@ -166,6 +166,8 @@ def _apply_ue_report(context, ue_report, report):
             report.info(f"UE imported {item['file']}: {', '.join(item.get('imported', []))}")
         else:
             report.error(f"UE failed on {item['file']}: {'; '.join(item.get('errors', []))[:300]}")
+        for warning in item.get("warnings", []):
+            report.warning(f"UE, {item['file']}: {warning}")
         skeleton = item.get("skeleton")
         arm_name = item.get("source_armature")
         if skeleton and arm_name:

@@ -181,6 +181,45 @@ class InterchangeImportTests(UnrealScriptCase):
         self.assertEqual(report["items"][0]["skeleton"], "/Game/MB/SKM_Hero_Skeleton")
         self.assertTrue(any("already exists" in m for m in U.messages("Warning")))
 
+    def test_imported_list_is_what_the_importer_created(self):
+        U.add_asset("StaticMesh", "/Game/MB/SM_Rock_Big")
+        item = self.item("STATIC_MESH", "SM_Rock")
+        U.plan_import(item["path"], [("StaticMesh", "SM_Rock"), ("Material", "M_Stone")])
+        report, _ = self.import_manifest([item])
+        self.assertEqual(report["items"][0]["imported"], ["/Game/MB/SM_Rock", "/Game/MB/M_Stone"])
+        self.assertEqual(U.STATE.saved, ["/Game/MB/SM_Rock", "/Game/MB/M_Stone"])
+
+    def test_assets_left_by_an_earlier_push_do_not_hide_a_failure(self):
+        U.add_asset("StaticMesh", "/Game/MB/SM_Crate")
+        item = self.item("STATIC_MESH", "SM_Crate")
+        report, _ = self.import_manifest([item])
+        self.assertFalse(report["items"][0]["success"])
+        self.assertEqual(report["items"][0]["imported"], [])
+
+    def test_renamed_assets_are_listed_and_saved_under_their_new_names(self):
+        item = self.item("SKELETAL_MESH", "SKM_Hero")
+        U.plan_import(
+            item["path"],
+            [
+                ("SkeletalMesh", "SKM_Hero"),
+                ("Skeleton", "SKM_Hero_Skeleton"),
+                ("PhysicsAsset", "SKM_Hero_PhysicsAsset"),
+            ],
+        )
+        report, _ = self.import_manifest([item])
+        expected = ["/Game/MB/SKM_Hero", "/Game/MB/SKEL_Hero", "/Game/MB/PHYS_Hero"]
+        self.assertEqual(report["items"][0]["imported"], expected)
+        self.assertEqual(U.STATE.saved, expected)
+
+    def test_announced_assets_that_were_not_created_are_warnings(self):
+        assets = [{"node": "SM_A", "name": "SM_A"}, {"node": "SM_B", "name": "SM_B"}]
+        item = self.item("STATIC_MESH", "Props", assets=assets, single=False)
+        U.plan_import(item["path"], [("StaticMesh", "Props")])
+        report, _ = self.import_manifest([item])
+        result = report["items"][0]
+        self.assertTrue(result["success"])
+        self.assertEqual(result["warnings"], ["/Game/MB/SM_A was not created", "/Game/MB/SM_B was not created"])
+
     def test_animation_uses_the_skeleton_imported_in_the_same_batch(self):
         mesh = self.item("SKELETAL_MESH", "SKM_Hero", source_armature="Hero")
         anim = self.item("ANIMATION", "A_Hero_Run", source_armature="Hero", skeleton=None, fps=30)
@@ -417,8 +456,6 @@ class CommonHelperTests(UnrealScriptCase):
         with mock.patch.object(U.EditorAssetLibrary, "save_loaded_asset", side_effect=RuntimeError("locked")):
             C.save_asset(asset)
         self.assertTrue(any("Could not save SM_Crate" in m for m in U.messages("Warning")))
-        with mock.patch.object(U.EditorAssetLibrary, "list_assets", side_effect=RuntimeError("bad path")):
-            self.assertEqual(C.list_assets("/Game/MB"), [])
         with mock.patch.object(U.EditorAssetLibrary, "rename_asset", return_value=False):
             self.assertEqual(C.rename_asset(asset, "SM_Box"), "/Game/MB/SM_Crate")
         self.assertEqual(C.rename_asset(asset, "SM_Crate"), "/Game/MB/SM_Crate")

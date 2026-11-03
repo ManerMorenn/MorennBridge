@@ -311,16 +311,6 @@ class EditorAssetLibrary:
         STATE.saved.append(_object_path(asset_to_save.get_path_name()))
         return True
 
-    @staticmethod
-    def list_assets(directory_path, recursive=True, include_folder=False):
-        folder = directory_path.rstrip("/")
-        out = []
-        for package, asset in sorted(STATE.assets.items()):
-            parent = package.rsplit("/", 1)[0]
-            if parent == folder or (recursive and parent.startswith(folder + "/")):
-                out.append(asset.get_path_name())
-        return Array(out)
-
 
 class EditorUtilityLibrary:
     @staticmethod

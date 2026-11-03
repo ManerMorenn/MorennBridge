@@ -147,13 +147,10 @@ def import_interchange(item, options):
         C.setp(params, "destination_name", item["assets"][0]["name"], optional=True)
     manager = unreal.InterchangeManager.get_interchange_manager_scripted()
     source = unreal.InterchangeManager.create_source_data(item["path"])
-    result = manager.import_asset(item["destination_path"], source, params)
-    objects = []
-    ok = bool(result)
-    if isinstance(result, tuple):
-        ok = bool(result[0])
-        objects = [o for o in result[1]] if len(result) > 1 and result[1] is not None else []
-    return ok, [C.asset_path(o) for o in objects if o is not None]
+    # Python drops the bool return value: the imported objects on success, None on failure
+    objects = manager.import_asset(item["destination_path"], source, params)
+    paths = list(dict.fromkeys(C.asset_path(o) for o in objects or [] if o is not None))
+    return bool(paths), paths
 
 
 # ---------------------------------------------------------------------- legacy
@@ -240,24 +237,17 @@ def import_legacy(item, options):
         C.setp(asd, "force_front_x_axis", False)
     task.set_editor_property("options", ui)
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
-    paths = [p.split(".")[0] for p in task.get_editor_property("imported_object_paths")]
+    paths = list(dict.fromkeys(p.split(".")[0] for p in task.get_editor_property("imported_object_paths")))
     return bool(paths), paths
 
 
 # ---------------------------------------------------------------------- post-processing
 
 
-def find_assets(item, imported_paths):
-    """Imported asset paths, completed by a folder scan for the expected names."""
-    folder = item["destination_path"]
-    expected = {a["name"] for a in item.get("assets", [])}
-    found = set(imported_paths)
-    for path in C.list_assets(folder):
-        obj_path = path.split(".")[0]
-        name = obj_path.rsplit("/", 1)[-1]
-        if name in expected or any(name.startswith(e + "_") for e in expected):
-            found.add(obj_path)
-    return sorted(found)
+def missing_assets(item, imported_paths):
+    """Asset paths the manifest announces that the import did not create."""
+    folder = item["destination_path"].rstrip("/")
+    return [f"{folder}/{a['name']}" for a in item.get("assets", []) if f"{folder}/{a['name']}" not in imported_paths]
 
 
 def post_process(item, options, paths, report_item):
@@ -269,22 +259,21 @@ def post_process(item, options, paths, report_item):
             base = a["name"]
             break
     base_noprefix = base.split("_", 1)[1] if base and "_" in base else base
-    for path in list(paths):
+    for index, path in enumerate(list(paths)):
         asset = C.load(path)
         if asset is None:
             continue
         cls = asset.get_class().get_name()
+        new_path = path
         if cls == "Skeleton":
-            skeleton_path = path
             if options.get("rename_skeleton") and base_noprefix:
                 new_path = C.rename_asset(asset, f"{options.get('skeleton_prefix', 'SKEL_')}{base_noprefix}")
-                if new_path != path:
-                    renames.append([path, new_path])
-                    skeleton_path = new_path
+            skeleton_path = new_path
         elif cls == "PhysicsAsset" and options.get("rename_skeleton") and base_noprefix:
             new_path = C.rename_asset(asset, f"{options.get('physics_prefix', 'PHYS_')}{base_noprefix}")
-            if new_path != path:
-                renames.append([path, new_path])
+        if new_path != path:
+            renames.append([path, new_path])
+            paths[index] = new_path
     # complex collision mesh link
     if options.get("link_complex_collision"):
         for a in item.get("assets", []):
@@ -322,12 +311,13 @@ def import_item(item, options, use_interchange):
             ok, paths = import_interchange(item, options)
         else:
             ok, paths = import_legacy(item, options)
-        paths = find_assets(item, paths)
         report_item["imported"] = paths
-        report_item["success"] = bool(ok or paths)
-        if not report_item["success"]:
+        report_item["success"] = ok
+        if not ok:
             report_item["errors"].append("Importer reported failure")
         else:
+            for path in missing_assets(item, paths):
+                report_item["warnings"].append(f"{path} was not created")
             post_process(item, options, paths, report_item)
     except Exception as exc:
         report_item["errors"].append(f"{exc!r}\n{C.exc_text()}")
