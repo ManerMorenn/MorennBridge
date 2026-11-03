@@ -31,7 +31,10 @@ runs:
         path: ~/blender-${{ inputs.version }}
         key: blender-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
 
+    # No colon in the folder name: Python reads a colon in Blender's Python home as a prefix separator.
     - id: blender
       name: Download Blender
       shell: bash
-      run: python dev/ci/get_blender.py "${{ inputs.version }}" "$HOME/blender-${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ inputs.version }}
+      run: python dev/ci/get_blender.py "$VERSION" "$HOME/blender-${VERSION//:/-}" >> "$GITHUB_OUTPUT"
