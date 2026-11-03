@@ -23,6 +23,23 @@ class StagingError(RuntimeError):
     pass
 
 
+def group_faces_by_plane(me):
+    """Faces ordered side by side: Unreal's legacy importer reads a UBX box only when each side's faces are adjacent."""
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.normal_update()
+
+    def plane(face):
+        axis = max(range(3), key=lambda i: abs(face.normal[i]))
+        return axis, round(face.calc_center_median()[axis], 4)
+
+    bm.faces.index_update()
+    rank = {face.index: position for position, face in enumerate(sorted(bm.faces, key=plane))}
+    bm.faces.sort(key=lambda face: rank[face.index])
+    bm.to_mesh(me)
+    bm.free()
+
+
 class Staging:
     """``with Staging(context, report) as st: ...``: temp scene + collection + copies."""
 

@@ -153,7 +153,7 @@ def _stage_static_group(st, group, settings, lod_mode, node_names, report):
     for obj, kind in group.collisions:
         counters[kind] = counters.get(kind, 0) + 1
         node = take(naming.collision_node_name(kind, collision_body, counters[kind]))
-        st.stage_mesh(
+        staged = st.stage_mesh(
             obj,
             node,
             anchor @ obj.matrix_world,
@@ -163,6 +163,8 @@ def _stage_static_group(st, group, settings, lod_mode, node_names, report):
             strip_attributes=True,
             keep_materials=False,
         )
+        if kind == "UBX":
+            staging.group_faces_by_plane(staged.data)
         entry["collisions"] += 1
     if group.sockets and has_lods and lod_mode == "LODGROUP_NODES" and settings.ue_importer == "INTERCHANGE":
         report.warning(
