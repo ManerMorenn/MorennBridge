@@ -16,7 +16,6 @@ ignore = [
 "__init__.py" = ["F401", "E402"]  # the version must exist before the submodules import it
 "ops/__init__.py" = ["F401"]
 "ui/__init__.py" = ["F401"]
-"ue/scripts/*" = ["E402"]   # sys.path setup must precede the unreal/mb_ue_common imports
 "tests/*" = ["E402"]
 
 [tool.ruff.format]

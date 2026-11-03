@@ -5,16 +5,26 @@ Run inside UE:  mb_ue_import.py "<path/to/batch.morenn.json>"
 Writes "<manifest>.result.json" next to the manifest and keeps the report in mb_ue_common.LAST_RESULT.
 """
 
+import importlib.util
 import json
 import os
 import sys
 
-_HERE = os.path.dirname(os.path.abspath(__file__ if "__file__" in globals() else sys.argv[0]))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-
-import mb_ue_common as C
 import unreal
+
+_HERE = os.path.dirname(os.path.abspath(__file__ if "__file__" in globals() else sys.argv[0]))
+
+
+def _load_common():
+    """mb_ue_common from this folder, loaded again on each run: the editor keeps the modules of earlier runs."""
+    spec = importlib.util.spec_from_file_location("mb_ue_common", os.path.join(_HERE, "mb_ue_common.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["mb_ue_common"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+C = _load_common()
 
 KIND_STATIC = "STATIC_MESH"
 KIND_SKELETAL = "SKELETAL_MESH"

@@ -8,6 +8,7 @@ import runpy
 import shutil
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -425,6 +426,15 @@ class EntryPointTests(UnrealScriptCase):
         self.run_script("mb_ue_export.py", out)
         with open(os.path.join(out, "pull.result.json"), encoding="utf-8") as fh:
             self.assertEqual(json.load(fh)["items"][0]["kind"], "STATIC_MESH")
+
+    def test_scripts_use_the_helpers_next_to_them(self):
+        stale = types.ModuleType("mb_ue_common")  # left in a running editor by an older add-on or another folder
+        sys.modules["mb_ue_common"] = stale
+        for name in ("mb_ue_import", "mb_ue_export"):
+            module = self.load(name)
+            self.assertIsNot(module.C, stale)
+            self.assertTrue(os.path.samefile(module.C.__file__, os.path.join(SCRIPTS, "mb_ue_common.py")))
+            self.assertIs(sys.modules["mb_ue_common"], module.C)
 
 
 class ExportScriptTests(UnrealScriptCase):
