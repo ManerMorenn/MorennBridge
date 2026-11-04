@@ -406,6 +406,9 @@ class FixerTests(unittest.TestCase):
         self.assertTrue(self.fix([rig], "E010")[0])
         self.assertIn("spine_001", rig.data.bones)
         self.assertEqual(body.vertex_groups[1].name, "spine_001")
+        rig.data.bones["bone_02"].name = "mixamorig:Head"  # Unreal drops FBX namespaces
+        self.assertTrue(self.fix([rig], "E010")[0])
+        self.assertIn("Head", rig.data.bones)
 
     def test_rename_bones_avoids_collisions(self):
         rig, _body = _rigged_character("Hero")

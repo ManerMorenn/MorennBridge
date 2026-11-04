@@ -28,7 +28,7 @@ A curve, surface, text or metaball exports like a static mesh. A collection inst
 
 Hidden objects are skipped, including objects in excluded collections. Collision, LOD and socket objects follow their mesh even when hidden.
 
-Bone names must survive Unreal's sanitising (`spine.001` would become `spine_001`): the pre-flight check offers a one-click rename so Blender and Unreal use identical names.
+Bone names must survive Unreal's sanitising (`spine.001` would become `spine_001`; both importers drop an FBX namespace, so Mixamo's `mixamorig:Hips` becomes `Hips`): the pre-flight check offers a one-click rename so Blender and Unreal use identical names.
 
 ## Skeletons
 - One root bone (`root` by convention). Root motion lives on the root bone: Unreal ignores motion of the armature *object* and of its parents.

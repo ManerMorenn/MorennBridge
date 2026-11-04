@@ -49,9 +49,11 @@ def sanitize_asset_name(name):
 
 
 def sanitize_ue_name(name):
-    """Exactly what Unreal Interchange does to a node/bone name (so Blender names can match UE names)."""
+    """What Unreal does to a node/bone name by default, so Blender names can match UE names: both importers drop the
+    FBX namespace (``mixamorig:Hips`` -> ``Hips``; with *Keep FBX Namespace* on it would be ``mixamorig_Hips``), then
+    Interchange replaces the characters it does not accept."""
     out = []
-    for ch in name:
+    for ch in name.rsplit(":", 1)[-1]:
         if ch == " ":
             out.append("-")
         elif ch == "+" or ch in UE_INVALID_CHARS:

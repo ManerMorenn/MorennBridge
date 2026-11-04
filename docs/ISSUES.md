@@ -12,7 +12,7 @@ The Pre-flight panel and the Log show these codes. Errors stop an export until t
 | E003 | Mirrored (negative) scale. Normals would flip. | *Apply scale*. Shared mesh data gets its own copy. |
 | E004 | A mesh is parented to a bone without skinning. Unreal would turn it into a bone. | *Convert bone parenting to skinning*. |
 | E008 | Several objects would export under the same asset name. | Set *Name* in the Object panel on one of them. |
-| E010 | Bone names that Unreal would rewrite, such as `spine.001`. | *Rename bones like Unreal would*, so names match on both sides. |
+| E010 | Bone names that Unreal would rewrite, such as `spine.001` (→ `spine_001`) or `mixamorig:Hips` (Unreal drops the FBX namespace: → `Hips`). | *Rename bones like Unreal would*, so names match on both sides. |
 | E012 | A modifier changes the vertex count between shape keys, so they cannot be kept. | Remove the modifier or apply it on the shape keys first. Raised during export. |
 | E013 | The armature has a non-uniform scale. | *Apply scale*. |
 | E019 | The mesh has no faces once its modifiers are applied. | Check the modifiers, or exclude the object. |
