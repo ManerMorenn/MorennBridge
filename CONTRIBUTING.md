@@ -40,7 +40,9 @@ to `<Project>/Intermediate/PythonStub/unreal.py`, and `python dev/check_ue_names
 `python dev/ue_smoke/run.py --blender <blender> --editor <UnrealEditor-Cmd> --project <test.uproject> [--roundtrip]`
 exports test scenes with the add-on, imports them into a test project with `ue/scripts` (no editor window) and
 checks names, LODs, collision, sockets, shading, skeletons, animations and vertex colours with Unreal's Python.
-`--roundtrip` also sends the Third Person template's mannequin through Blender and back. Use a project made for
+`--roundtrip` also sends the Third Person template's mannequin through Blender and back, and the UE4 mannequin when
+the project has it (copy the engine's `Templates/TemplateResources/Standard/Mannequin/Content` to
+`<Project>/Content/Mannequin`). Use a project made for
 testing: the run replaces `/Game/MorennBridgeSmoke`. With the project open in the editor and remote execution on,
 `--remote` (no `--editor`) checks Unreal Link instead: discovery, push, pull and push back, through paths with
 spaces and accents. `--real <dir>` round-trips every FBX file of a folder (characters made elsewhere) and compares

@@ -31,6 +31,7 @@ MANNEQUIN = (
     "/Game/Characters/Mannequins/Anims/Unarmed/Jog/MF_Unarmed_Jog_Fwd",
 )
 FULL_MANNY = "/Game/Characters/Mannequins/Meshes/SKM_Manny"
+UE4_MANNEQUIN = ("/Game/Mannequin/Character/Mesh/SK_Mannequin", "/Game/Mannequin/Animations/ThirdPersonRun")
 
 
 def vec(v):
@@ -371,8 +372,12 @@ def compare_animation(case, name, exp):
         skeleton == ref_skeleton, f"{name}: on the original skeleton", short(skeleton and skeleton.get_path_name())
     )
     keys, ref_keys = unreal.AnimationLibrary.get_num_keys(anim), unreal.AnimationLibrary.get_num_keys(reference)
-    case.check(keys == ref_keys, f"{name}: keys", f"{keys}, original {ref_keys}")
     length, ref_length = anim.get_play_length(), reference.get_play_length()
+    ref_rate = (ref_keys - 1) / ref_length if ref_length else 0.0
+    if abs(ref_rate - round(ref_rate)) < 1e-3:
+        case.check(keys == ref_keys, f"{name}: keys", f"{keys}, original {ref_keys}")
+    else:  # a Blender scene runs at whole frames per second: the animation is resampled
+        case.note(f"{name}: keys", f"{keys}, original {ref_keys} at {ref_rate:.3f} fps, resampled")
     case.check(abs(length - ref_length) < 1e-4, f"{name}: length", f"{length:.5f} s, original {ref_length:.5f}")
     settings = common.read_settings(anim, common.ANIM_SETTINGS)
     wanted = common.read_settings(reference, common.ANIM_SETTINGS)
@@ -382,16 +387,13 @@ def compare_animation(case, name, exp):
     # Unreal's FBX export holds the preview mesh's bones only; the others cannot come back
     bones = [str(n) for n in unreal.AnimationLibrary.get_animation_track_names(anim)]
     case.check(bones, f"{name}: bone tracks", f"{len(bones)} tracks")
-    for frame in sorted({0, ref_keys // 2, ref_keys - 1}):
-        pose = POSE.get_anim_pose_at_frame(anim, frame, options)
-        ref_pose = POSE.get_anim_pose_at_frame(reference, frame, options)
+    for frame in sorted({0, keys // 2, keys - 1}):  # at the times of our keys
+        t = frame * length / (keys - 1) if keys > 1 else 0.0
+        pose = POSE.get_anim_pose_at_time(anim, t, options)
+        ref_pose = POSE.get_anim_pose_at_time(reference, t, options)
         distance, at, angle, at_angle = pose_difference(pose, ref_pose, bones)
-        case.check(
-            distance < 0.05, f"{name}: positions at frame {frame}", f"largest difference {distance:.4f} cm ({at})"
-        )
-        case.check(
-            angle < 0.05, f"{name}: rotations at frame {frame}", f"largest difference {angle:.4f} deg ({at_angle})"
-        )
+        case.check(distance < 0.05, f"{name}: positions at {t:.3f} s", f"largest difference {distance:.4f} cm ({at})")
+        case.check(angle < 0.05, f"{name}: rotations at {t:.3f} s", f"largest difference {angle:.4f} deg ({at_angle})")
 
 
 def mesh_state(mesh):
@@ -496,6 +498,8 @@ def shared_material_mesh(root):
 
 def export_mannequin(out_dir, root):
     extra = [FULL_MANNY] if LIB.does_asset_exist(FULL_MANNY) else []  # not in UE 5.8's template
+    if LIB.does_asset_exist(UE4_MANNEQUIN[0]):  # UE 5.8's Templates/TemplateResources/Standard/Mannequin
+        extra += list(UE4_MANNEQUIN)
     report = mb_export.run(out_dir, list(MANNEQUIN) + extra + [shared_material_mesh(root)])
     unreal.log(f"[smoke] mannequin export: {'ok' if report['ok'] else 'FAILED'}")
 

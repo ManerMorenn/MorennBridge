@@ -24,6 +24,7 @@ from mathutils import Quaternion, Vector
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 MANNEQUIN_SKELETON = "/Game/Characters/Mannequins/Meshes/SK_Mannequin"
+UE4_SKELETON = "/Game/Mannequin/Character/Mesh/SK_Mannequin_Skeleton"
 
 
 def ue(v):
@@ -489,6 +490,37 @@ def case_mannequin(smoke, ue_export):
         smoke.add(
             "manny_full", 5, [smoke.export("manny_full", "mesh", [full])], {"compare_skeletal": {"SKM_Manny": compare}}
         )
+    if "SK_Mannequin" in pulled:  # the UE4 mannequin (mirrored arm and leg axes), when the project has it
+        case_ue4_mannequin(smoke, pulled)
+
+
+def exported_asset(manifest):
+    with open(manifest, encoding="utf-8") as fh:
+        return json.load(fh)["items"][0]["assets"][0]["name"]
+
+
+def case_ue4_mannequin(smoke, pulled):
+    """Per-bone axes: the UE4 mannequin on its own skeleton, and with its run on the original one."""
+    # Unreal's own export of this asset, imported again, is up to 0.078 deg off its rest pose (ball_l, ball_r):
+    # compare with that import, as for files made elsewhere
+    case_real_file(smoke, pulled["SK_Mannequin"]["file"])
+    fixtures.fresh_scene(cm=True)
+    rig = import_unreal_file(pulled["SK_Mannequin"]).armatures[0]
+    compare = {"reference": pulled["SK_Mannequin"]["asset_path"], "bones": [b.name for b in rig.data.bones]}
+    rig.data.morenn.ue_skeleton_path = UE4_SKELETON
+    manifests = [smoke.export("ue4_mannequin_on_skeleton", "mesh", [rig])]
+    asset = exported_asset(manifests[0])
+    scene = fixtures.fresh_scene(cm=True)
+    scene.render.fps = int(round(file_fps(pulled["ThirdPersonRun"]["file"])))
+    rig = import_unreal_file(pulled["ThirdPersonRun"]).armatures[0]
+    rig.name = "Mannequin"
+    rig.data.morenn.ue_skeleton_path = UE4_SKELETON
+    manifests.append(smoke.export("ue4_mannequin_on_skeleton", "ThirdPersonRun", [rig], mode="ANIMATION"))
+    expect = {
+        "compare_skeletal": {asset: dict(compare, skeleton=UE4_SKELETON)},
+        "compare_animations": {exported_asset(manifests[1]): {"reference": pulled["ThirdPersonRun"]["asset_path"]}},
+    }
+    smoke.add("ue4_mannequin_on_skeleton", 6, manifests, expect)
 
 
 def case_real_file(smoke, path):
