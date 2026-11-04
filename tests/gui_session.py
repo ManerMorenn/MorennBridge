@@ -165,7 +165,8 @@ def prepare_export():
 
 
 def push_without_blocking():
-    """A push returns at once; the operator finishes on the main thread when the editor answers."""
+    """A push returns at once and starts no thread; timer steps finish it when the editor answers."""
+    import threading
     from unittest import mock
 
     from tests.test_remote import PORT, FakeUnrealNode, loopback_multicast_available
@@ -179,6 +180,7 @@ def push_without_blocking():
     fake = FakeUnrealNode()
     fake.delay = 1.0
     fake.start()
+    threads = set(threading.enumerate())
     port, prefs.multicast_port = prefs.multicast_port, PORT
     try:
         with mock.patch.object(ue_ops.compat, "online_access_allowed", return_value=True):
@@ -190,12 +192,15 @@ def push_without_blocking():
             with bpy.context.temp_override(**override()):
                 started = bpy.ops.morenn.ue_push("INVOKE_DEFAULT")
             check(started == {"RUNNING_MODAL"}, "push returns while Unreal imports")
-            check(ue_ops.busy(), "push waits for Unreal in a thread")
+            check(ue_ops.busy(), "push is running")
+            extra = set()
             for _ in range(100):
+                extra |= set(threading.enumerate()) - threads
                 if not ue_ops.busy() and runtime.ue_status != "Importing in FakeProject…":
                     break
                 yield
-            check(runtime.ue_status == "Done", f"push finishes on the main thread (status: {runtime.ue_status})")
+            check(not extra, f"push starts no thread ({sorted(t.name for t in extra)})")
+            check(runtime.ue_status == "Done", f"push finishes on timer steps (status: {runtime.ue_status})")
             check(len(fake.commands) == 1, "Unreal received one import command")
     finally:
         fake.close()

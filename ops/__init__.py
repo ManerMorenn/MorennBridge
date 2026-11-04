@@ -13,6 +13,7 @@ def register():
 
 
 def unregister():
+    ue_ops.close_jobs()
     for module in reversed(MODULES):
         for cls in reversed(module.classes):
             bpy.utils.unregister_class(cls)

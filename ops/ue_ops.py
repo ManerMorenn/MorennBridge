@@ -3,7 +3,6 @@
 
 import json
 import os
-import threading
 import time
 
 import bpy
@@ -16,6 +15,7 @@ from ..prefs import get_prefs
 from ..ue import remote
 
 SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ue", "scripts")
+CONNECT_TIMEOUT = 5.0
 _JOBS = []
 
 
@@ -24,43 +24,71 @@ def _session(prefs):
 
 
 class RemoteJob:
-    """One command sent to Unreal from a worker thread. Only plain values cross the thread, never Blender data."""
+    """One command sent to Unreal on the main thread: connect, send, read the result, a non-blocking step at a time.
+
+    There is no worker thread: Blender 4.5 and 5.0 (Python 3.11) can crash in a context lookup inside
+    ``temp_override``, as in an export, while another Python thread holds the GIL.
+    """
 
     def __init__(self, prefs, node, script, *args):
-        self.settings = (prefs.multicast_group, prefs.multicast_port, prefs.bind_address, prefs.command_ip)
+        self.session = _session(prefs)
         self.node = node
-        self.command = (script, *args)
+        self.command = remote.file_command(script, *args)
         self.timeout = float(prefs.command_timeout)
         self.result = None
         self.error = None
-        self.thread = threading.Thread(target=self._run, name="MorennBridge Unreal Link", daemon=True)
-
-    def _run(self):
-        try:
-            with remote.RemoteSession(*self.settings) as session:
-                session.connect(self.node, timeout=5.0)
-                self.result = session.run_file(*self.command, timeout=self.timeout)
-        except Exception as exc:  # reported by finish() on the main thread
-            self.error = exc
+        self.done = False
 
     def start(self):
         _JOBS.append(self)
-        self.thread.start()
+        try:
+            self.session.open_udp()
+            self.session.start_connect(self.node, timeout=CONNECT_TIMEOUT)
+        except Exception as exc:  # reported by finish()
+            self.error = exc
+            self.close()
         return self
 
-    @property
-    def running(self):
-        return self.thread.is_alive()
+    def step(self, wait=0.0):
+        """Go as far as the sockets allow, waiting at most ``wait`` seconds for them. True once done."""
+        if self.done:
+            return True
+        session = self.session
+        try:
+            if not session.connected:
+                if not session.poll_connect(wait):
+                    return False
+                session.start_command(self.command, remote.EXEC_FILE, timeout=self.timeout)
+            self.result = session.poll_result(wait)
+        except Exception as exc:  # reported by finish()
+            self.error = exc
+        if self.result is None and self.error is None:
+            return False
+        self.close()
+        return True
 
     def wait(self):
-        self.thread.join()
+        """Run the steps until the editor answers or a timeout ends the job."""
+        while not self.step(wait=0.5):
+            pass
         return self
+
+    def close(self):
+        self.done = True
+        self.session.close()
+        if self in _JOBS:
+            _JOBS.remove(self)
 
 
 def busy():
-    """True while a push or pull waits for Unreal."""
-    _JOBS[:] = [job for job in _JOBS if job.running]
+    """True while a push or pull operator is running."""
     return bool(_JOBS)
+
+
+def close_jobs():
+    """Blender frees running operators without calling cancel() when their class is unregistered."""
+    for job in list(_JOBS):
+        job.close()
 
 
 def _set_status(context, text):
@@ -73,10 +101,11 @@ def _set_status(context, text):
 
 
 class RemoteJobOperator:
-    """Push and pull: the editor works in a thread while Blender stays usable; results land on the main thread.
+    """Push and pull: each timer event moves the job one non-blocking step, so Blender stays usable while Unreal
+    works, without a second thread.
 
     Subclasses implement ``start_job(context)`` (returns a started RemoteJob or None) and ``finish(context, job)``.
-    Without a window (background mode, scripts calling ``execute``) the operator waits for the job.
+    Without a window (background mode, scripts calling ``execute``) the operator runs the steps in a loop.
     """
 
     _job = None
@@ -89,7 +118,7 @@ class RemoteJobOperator:
         if self._job is None:
             return {"CANCELLED"}
         wm = context.window_manager
-        self._timer = wm.event_timer_add(0.2, window=context.window)
+        self._timer = wm.event_timer_add(0.1, window=context.window)
         wm.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
@@ -100,15 +129,19 @@ class RemoteJobOperator:
         return self.finish(context, job.wait())
 
     def modal(self, context, event):
-        if event.type != "TIMER" or self._job.running:
+        if event.type != "TIMER" or not self._job.step():
             return {"PASS_THROUGH"}
         self.cancel(context)
         return self.finish(context, self._job)
 
     def cancel(self, context):
+        """Also called by Blender when it stops the operator (file load, window closed): the session is closed."""
         if self._timer is not None:
             context.window_manager.event_timer_remove(self._timer)
             self._timer = None
+        if self._job is not None and not self._job.done:
+            self._job.close()
+            context.window_manager.morenn_rt.ue_status = "Cancelled"
 
 
 def _selected_node(context):

@@ -26,7 +26,7 @@ class FakeUnrealNode(threading.Thread):
 
     Like OpenCommandConnection in PythonScriptRemoteExecution.cpp, an open_connection is ignored while connected to
     the same node and endpoint. ``drop_opens`` loses that many open_connection messages; ``connect_delay`` delays
-    the connection back; ``delay`` delays each answer.
+    the connection back; ``delay`` delays each answer; ``hang_up`` closes the connection instead of answering.
 
     The thread sleeps in ``select`` and only runs Python while it answers a message: Blender 4.5 and 5.0 can crash
     in an export while another Python thread holds the GIL. ``close()`` wakes it through a socket pair (``select``
@@ -40,6 +40,7 @@ class FakeUnrealNode(threading.Thread):
         self.success = True
         self.output = [{"type": "Info", "output": "hello from fake UE"}]
         self.delay = 0.0
+        self.hang_up = False
         self.drop_opens = 0
         self.connect_delay = 0.0
         self.opens = 0
@@ -151,6 +152,9 @@ class FakeUnrealNode(threading.Thread):
         msg = json.loads(raw.decode())
         data = msg["data"]
         self.commands.append(data)
+        if self.hang_up:
+            self._close()
+            return
         result = {
             "success": self.success,
             "command": data["command"],
@@ -268,10 +272,64 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertGreaterEqual(time.monotonic() - started, 0.6)
         self.assertGreaterEqual(self.fake.opens, 3)
 
+    def test_steps_never_block(self):
+        """With wait=0 every step returns at once, while the editor takes its time to connect and to answer."""
+        session, node = self.discovered()
+        self.fake.connect_delay = 0.5
+        self.fake.delay = 0.5
+        steps = []
+
+        def until(poll):
+            while True:
+                started = time.monotonic()
+                done = poll(0.0)
+                steps.append(time.monotonic() - started)
+                if done:
+                    return done
+                time.sleep(0.02)
+
+        session.start_connect(node, timeout=3.0, resend_interval=0.1)
+        self.assertTrue(until(session.poll_connect))
+        session.start_command("1+41", self.remote.EXEC_EVALUATE, timeout=5.0)
+        self.assertEqual(until(session.poll_result).result, "42")
+        self.assertGreater(len(steps), 20)
+        self.assertLess(max(steps), 0.25)
+        self.assertEqual(self.fake.connections, 1)
+
+    def test_connection_made_while_blender_was_busy(self):
+        """The editor connected back during an export that outlasted the timeout: the next step takes it."""
+        session, node = self.discovered()
+        started = time.monotonic()
+        session.start_connect(node, timeout=0.3)
+        self.assertFalse(session.poll_connect(0.0))
+        while self.fake.tcp is None and time.monotonic() < started + 3.0:
+            time.sleep(0.02)
+        time.sleep(max(0.0, started + 0.4 - time.monotonic()))
+        self.assertTrue(session.poll_connect(0.0))
+        self.assertEqual(session.evaluate("1+41", timeout=5.0).result, "42")
+
+    def test_no_answer_within_the_timeout(self):
+        session, node = self.discovered()
+        session.connect(node, timeout=3.0)
+        self.fake.delay = 1.0
+        with self.assertRaisesRegex(self.remote.RemoteError, "No answer from Unreal within 0.3s"):
+            session.evaluate("1+41", timeout=0.3)
+
+    def test_editor_hanging_up(self):
+        session, node = self.discovered()
+        session.connect(node, timeout=3.0)
+        self.fake.hang_up = True
+        with self.assertRaisesRegex(self.remote.RemoteError, "Unreal closed the command connection"):
+            session.evaluate("1+41", timeout=5.0)
+
     def test_commands_need_a_connection(self):
         session = self.remote.RemoteSession(GROUP, PORT, "0.0.0.0", "127.0.0.1")
         with self.assertRaises(self.remote.RemoteError):
             session.run("print(1)")
+        with self.assertRaisesRegex(self.remote.RemoteError, "No connection was requested"):
+            session.poll_connect()
+        with self.assertRaisesRegex(self.remote.RemoteError, "No command was sent"):
+            session.poll_result()
 
 
 class UnrealOperatorTests(unittest.TestCase):
@@ -290,6 +348,8 @@ class UnrealOperatorTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def tearDown(self):
+        for job in list(self.ue_ops._JOBS):
+            job.close()
         self.prefs.multicast_port = self.original_port
         self.rt.ue_nodes.clear()
         fake = getattr(self, "fake", None)
@@ -381,19 +441,29 @@ class UnrealOperatorTests(unittest.TestCase):
         self.start_fake_editor()
         self.export_cube()
         remote = fixtures.addon_module("ue.remote")
-        with mock.patch.object(remote.RemoteSession, "connect", side_effect=remote.RemoteError("no answer")):
+        with mock.patch.object(remote.RemoteSession, "poll_connect", side_effect=remote.RemoteError("no answer")):
             self.assertEqual(fixtures.call(bpy.ops.morenn.ue_push), {"CANCELLED"})
         self.assertIn("no answer", fixtures.log_text())
         self.assertEqual(self.rt.ue_status, "Failed")
+        self.assertFalse(self.ue_ops.busy())
 
-    def test_any_error_in_the_worker_thread_is_reported(self):
+    def test_push_when_the_sockets_cannot_open(self):
+        self.start_fake_editor()
+        self.export_cube()
+        remote = fixtures.addon_module("ue.remote")
+        with mock.patch.object(remote.RemoteSession, "open_udp", side_effect=OSError("address in use")):
+            self.assertEqual(fixtures.call(bpy.ops.morenn.ue_push), {"CANCELLED"})
+        self.assertIn("address in use", fixtures.log_text())
+        self.assertFalse(self.ue_ops.busy())
+
+    def test_any_error_during_a_push_or_pull_is_reported(self):
         self.start_fake_editor()
         self.export_cube()
         remote = fixtures.addon_module("ue.remote")
         for operator in (bpy.ops.morenn.ue_push, bpy.ops.morenn.ue_pull):
             with self.subTest(operator=operator.idname()):
                 self.scene.morenn.log.clear()
-                with mock.patch.object(remote.RemoteSession, "run_file", side_effect=KeyError("command")):
+                with mock.patch.object(remote.RemoteSession, "start_command", side_effect=KeyError("command")):
                     self.assertEqual(fixtures.call(operator), {"CANCELLED"})
                 self.assertIn("Unreal Link failed: unexpected KeyError", fixtures.log_text())
                 self.assertEqual(self.rt.ue_status, "Failed")
@@ -406,13 +476,28 @@ class UnrealOperatorTests(unittest.TestCase):
 
     def modal_state(self, operator):
         """Stand-in for a running modal operator instance (bpy operators cannot be created directly)."""
-        state = types.SimpleNamespace(manifest="", report=mock.Mock(), _timer=None)
+        state = types.SimpleNamespace(manifest="", report=mock.Mock(), _timer=None, _job=None)
         state.cancel = lambda context: operator.cancel(state, context)
         state.finish = lambda context, job: operator.finish(state, context, job)
         return state
 
-    def test_push_waits_in_a_thread_and_finishes_on_the_main_thread(self):
+    def run_modal(self, operator, state, timeout=5.0):
+        """Send timer events until the operator ends; returns its result and the longest step in seconds."""
+        timer = types.SimpleNamespace(type="TIMER")
+        longest = 0.0
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            started = time.monotonic()
+            result = operator.modal(state, bpy.context, timer)
+            longest = max(longest, time.monotonic() - started)
+            if result != {"PASS_THROUGH"}:
+                return result, longest
+            time.sleep(0.02)
+        self.fail(f"{operator.bl_idname} did not finish within {timeout:g}s")
+
+    def test_push_runs_in_timer_steps_that_never_block(self):
         self.start_fake_editor()
+        self.fake.connect_delay = 0.5
         self.fake.delay = 0.5
         self.export_cube()
         push = self.ue_ops.MORENN_OT_ue_push
@@ -421,14 +506,34 @@ class UnrealOperatorTests(unittest.TestCase):
         self.assertTrue(self.ue_ops.busy())
         self.assertFalse(bpy.ops.morenn.ue_push.poll())
         self.assertEqual(self.rt.ue_status, "Importing in FakeProject…")
-        timer = types.SimpleNamespace(type="TIMER")
-        self.assertEqual(push.modal(state, bpy.context, timer), {"PASS_THROUGH"})
-        state._job.wait()
         self.assertEqual(push.modal(state, bpy.context, types.SimpleNamespace(type="MOUSEMOVE")), {"PASS_THROUGH"})
-        self.assertEqual(push.modal(state, bpy.context, timer), {"FINISHED"})
+        result, longest = self.run_modal(push, state)
+        self.assertEqual(result, {"FINISHED"})
+        self.assertLess(longest, 0.25, "a step waited for the editor")
         self.assertFalse(self.ue_ops.busy())
         self.assertEqual(self.rt.ue_status, "Done")
         self.assertIn("mb_ue_import.py", self.fake.commands[-1]["command"])
+
+    def test_push_and_pull_start_no_thread(self):
+        """Blender 4.5 and 5.0 can crash in an export while another Python thread holds the GIL."""
+        self.start_fake_editor()
+        self.export_cube()
+        started = []
+        start = threading.Thread.start
+
+        def record(thread):
+            started.append(thread.name)
+            start(thread)
+
+        with mock.patch.object(threading.Thread, "start", record):
+            for operator in (self.ue_ops.MORENN_OT_ue_push, self.ue_ops.MORENN_OT_ue_pull):
+                state = self.modal_state(operator)
+                state._job = operator.start_job(state, bpy.context)
+                self.run_modal(operator, state)
+            fixtures.call(bpy.ops.morenn.ue_push)
+            fixtures.call(bpy.ops.morenn.ue_pull)
+        self.assertEqual(started, [])
+        self.assertEqual([c["command"].count("mb_ue_import.py") for c in self.fake.commands], [1, 0, 1, 0])
 
     def test_push_without_a_window_waits_for_the_editor(self):
         self.start_fake_editor()
@@ -442,6 +547,39 @@ class UnrealOperatorTests(unittest.TestCase):
         state._timer = wm.event_timer_add(10.0, window=wm.windows[0])
         self.ue_ops.MORENN_OT_ue_push.cancel(state, bpy.context)
         self.assertIsNone(state._timer)
+
+    def test_cancel_closes_the_session(self):
+        self.start_fake_editor()
+        self.fake.delay = 0.5
+        self.export_cube()
+        push = self.ue_ops.MORENN_OT_ue_push
+        state = self.modal_state(push)
+        state._job = push.start_job(state, bpy.context)
+        deadline = time.monotonic() + 3.0
+        while not self.fake.commands and time.monotonic() < deadline:
+            push.modal(state, bpy.context, types.SimpleNamespace(type="TIMER"))
+            time.sleep(0.02)
+        self.assertEqual(len(self.fake.commands), 1)
+        push.cancel(state, bpy.context)
+        self.assertTrue(state._job.done)
+        self.assertFalse(state._job.session.connected)
+        self.assertFalse(self.ue_ops.busy())
+        self.assertEqual(self.rt.ue_status, "Cancelled")
+        deadline = time.monotonic() + 3.0
+        while self.fake.tcp is not None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertIsNone(self.fake.tcp, "the editor still holds the command connection")
+
+    def test_disabling_the_addon_closes_running_jobs(self):
+        """Blender frees a running operator without calling cancel() when its class is unregistered."""
+        self.start_fake_editor()
+        self.export_cube()
+        state = self.modal_state(self.ue_ops.MORENN_OT_ue_push)
+        job = self.ue_ops.MORENN_OT_ue_push.start_job(state, bpy.context)
+        self.assertTrue(self.ue_ops.busy())
+        self.ue_ops.close_jobs()
+        self.assertTrue(job.done)
+        self.assertFalse(self.ue_ops.busy())
 
     def test_export_does_not_start_a_second_push(self):
         self.start_fake_editor()
