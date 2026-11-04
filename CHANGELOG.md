@@ -10,7 +10,7 @@ First public version. Requires Blender 4.5 or newer.
   tangents, collision/socket/LOD naming, skeletal mesh LODs, generated collision meshes and a JSON manifest.
 - Curves, surfaces, text, metaballs, Geometry Nodes instances and collection instances export as meshes.
 - Import of Unreal FBX exports, binary or ASCII: root bone restored, per-bone axis conversion, bone lengths,
-  hierarchy clean-up.
+  hierarchy clean-up. Morph target names longer than Blender allows come back in full on export.
 - Pre-flight validation with automatic fixes, documented issue codes and an Export Anyway button.
 - Unreal Link: Python remote execution client and editor-side import/export scripts (experimental, not yet verified
   against a live editor). Unreal-only animation settings (root motion, retarget source…) and material slots

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Import FBX files coming from Unreal (or MorennBridge) into a clean Blender setup."""
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -25,6 +26,7 @@ class ImportInfo:
     lod_groups: list = field(default_factory=list)
     lod_levels: dict = field(default_factory=dict)  # node name -> LOD index, for everything under a LOD group
     bind_matrices: dict = field(default_factory=dict)  # bone name -> bind matrix (16 floats, column-major)
+    blend_shape_names: dict = field(default_factory=dict)  # mesh node name -> blend shape channel names in order
     anim_stacks: list = field(default_factory=list)
     anim_ranges: list = field(default_factory=list)  # (start, stop) seconds per stack, None when not stored
     has_skin: bool = False
@@ -76,6 +78,7 @@ def analyze(root):
     info.lod_groups = patches.lod_groups(root)
     info.lod_levels = patches.lod_levels(root)
     info.bind_matrices = patches.bind_matrices(root)
+    info.blend_shape_names = patches.blend_shape_names(root)
     stacks = I.anim_stacks(root)
     info.anim_stacks = [I.object_name(s).decode("utf-8", "replace") for s in stacks]
     info.anim_ranges = [_stack_range(s) for s in stacks]
@@ -193,6 +196,7 @@ def import_file(context, filepath, prefs, report, convert_axes=None, tidy=None, 
     result.meshes = [o for o in result.objects if o.type == "MESH"]
     result.actions = _new_since(before, "actions")
     context.view_layer.update()
+    _remember_shape_key_names(result, report)
 
     stem = os.path.splitext(os.path.basename(filepath))[0]
     for arm in result.armatures:
@@ -206,6 +210,37 @@ def import_file(context, filepath, prefs, report, convert_axes=None, tidy=None, 
 
 
 # ---------------------------------------------------------------------- post-processing
+
+NAME_LIMIT = 63  # bytes Blender keeps of a name
+
+
+def _blender_form(blender_name, fbx_name):
+    """True when ``blender_name`` is ``fbx_name`` as Blender stores it: equal, or cut to 63 bytes (then made unique
+    with a ``.001`` suffix)."""
+    if blender_name == fbx_name:
+        return True
+    return len(fbx_name.encode("utf-8")) > NAME_LIMIT and fbx_name.startswith(blender_name.rsplit(".", 1)[0])
+
+
+def _remember_shape_key_names(result, report):
+    """Keep the FBX names of shape keys that Blender had to shorten, for the export to restore (``shape_key_names``)."""
+    for obj in result.meshes:
+        keys = obj.data.shape_keys
+        names = result.info.blend_shape_names.get(obj.name) or result.info.blend_shape_names.get(
+            naming.strip_numeric_suffix(obj.name)
+        )
+        if keys is None or not names:
+            continue
+        blocks = list(keys.key_blocks)[1:]
+        if len(blocks) == len(names) and all(_blender_form(kb.name, full) for kb, full in zip(blocks, names)):
+            cut = {kb.name: full for kb, full in zip(blocks, names) if kb.name != full}
+            if cut:
+                obj.morenn.shape_key_names = json.dumps(cut, sort_keys=True)
+                report.info(
+                    f"'{obj.name}': {len(cut)} shape key names were longer than Blender allows; kept for export"
+                )
+        elif any(len(n.encode("utf-8")) > NAME_LIMIT for n in names):
+            report.warning(f"'{obj.name}': shape key names longer than {NAME_LIMIT} bytes were shortened")
 
 
 def _decide_axes(arm, info, prefs, report):

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Export, import and export again: what comes back has to match what went out."""
 
+import json
 import math
 import os
 import unittest
@@ -169,6 +170,29 @@ class SkeletalRoundTripTests(RoundTripCase):
         self.assertEqual([k.name for k in keys], ["Basis", "Puff"])
         ratio = keys["Puff"].data[0].co.length / keys["Basis"].data[0].co.length
         self.assertGreater(ratio, 1.05)
+
+    def test_shape_key_names_longer_than_blender_allows(self):
+        rig, body = _rigged_character("Hero")
+        body.shape_key_add(name="Puff2", from_mix=False).data[0].co.x += 5.0
+        path = self.export([rig])
+        patches, tree, insp = (fixtures.addon_module(f"fbxpatch.{m}") for m in ("patches", "tree", "inspect"))
+        root, version = tree.load(path)
+        long_names = ["corrective_" + "a" * 52 + "_L", "corrective_" + "a" * 52 + "_R"]  # 65 bytes, same 63 first
+        patches.rename_blend_shapes(root, {"SKM_Hero": dict(zip(["Puff", "Puff2"], long_names))})
+        for kind, child, parent, _prop, _e in list(insp.connections(root)):  # Unreal repeats these connections
+            if kind == b"OO" and insp.object_subclass(insp.object_by_id(root, child)) in (b"BlendShape", b"Shape"):
+                insp.add_connection(root, child, parent)
+        self.assertEqual(patches.blend_shape_names(root), {"SKM_Hero": long_names})
+        tree.save(path, root, version)
+
+        first = self.import_back(path)
+        mesh = first.meshes[0]
+        shortened = [k.name for k in mesh.data.shape_keys.key_blocks[1:]]
+        self.assertEqual(shortened[0], long_names[0][:63])
+        self.assertNotEqual(shortened[1], shortened[0])
+        self.assertEqual(json.loads(mesh.morenn.shape_key_names), dict(zip(shortened, long_names)))
+        root, _ = fixtures.fbx_load(self.export([first.armatures[0]], folder="b"))
+        self.assertEqual(patches.blend_shape_names(root), {"SKM_Hero": long_names})
 
     def test_second_generation_keeps_rest_pose(self):
         rig, _body = _rigged_character("Hero")

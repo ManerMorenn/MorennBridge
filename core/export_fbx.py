@@ -86,6 +86,7 @@ class ExportedFile:
     node_names: list = field(default_factory=list)  # final FBX node names (Models)
     lod_specs: list = field(default_factory=list)
     material_names: dict = field(default_factory=dict)  # Blender material -> Unreal slot of a pulled mesh
+    shape_key_names: dict = field(default_factory=dict)  # mesh node -> {shortened shape key name: full name}
     single_asset: bool = True
     has_armature: bool = False
     extra: dict = field(default_factory=dict)
@@ -268,7 +269,7 @@ def _skeletal_levels(group, lod_mode, report):
     return levels
 
 
-def _stage_skeletal_group(st, group, settings, lod_mode, node_names, report):
+def _stage_skeletal_group(st, group, settings, lod_mode, node_names, report, key_names):
     """Stage one skeletal mesh. Returns the manifest entries and its LOD levels (FBX node names) when it has LODs."""
     arm = group.armature
     anchor = staging.translation_removed(arm.matrix_world)
@@ -309,6 +310,7 @@ def _stage_skeletal_group(st, group, settings, lod_mode, node_names, report):
                 keep_shape_keys=True,
                 armature=arm_obj,
             )
+            _record_shape_key_names(key_names, node, mesh, report)
             n_trunc, n_unweighted = staging.limit_influences(obj, exported, settings.influence_limit, targets)
             if n_trunc:
                 report.info(
@@ -329,7 +331,7 @@ def _stage_skeletal_group(st, group, settings, lod_mode, node_names, report):
     return [entry], (lod_nodes if len(levels) > 1 else [])
 
 
-def _stage_anim_group(st, group, settings, node_names, report):
+def _stage_anim_group(st, group, settings, node_names, report, key_names):
     arm = group.armature
     if group.frame_range is None or group.frame_range[1] < group.frame_range[0]:
         raise staging.StagingError(f"'{group.asset_name}': empty frame range (E022)")
@@ -374,6 +376,7 @@ def _stage_anim_group(st, group, settings, node_names, report):
                 keep_shape_keys=True,
                 armature=arm_obj,
             )
+            _record_shape_key_names(key_names, node, mesh, report)
             staging.limit_influences(obj, exported, settings.influence_limit, targets)
     return [
         {
@@ -462,11 +465,14 @@ def post_process(
     report=None,
     bone_axes_map="",
     material_names=None,
+    shape_key_names=None,
 ):
     root, version = tree.load(path)
     patches.rename_nodes(root, name_map)
     if material_names:
         patches.rename_nodes(root, material_names, classes=(b"Material",))
+    if shape_key_names:
+        patches.rename_blend_shapes(root, shape_key_names)
     patches.set_globalsettings_string(root, MARKER_AXES, f"{bone_axes[0]}{bone_axes[1]}")
     patches.set_globalsettings_string(root, MARKER_AXES_MAP, bone_axes_map or "")
     patches.set_globalsettings_string(root, MARKER_VERSION, __version__)
@@ -512,7 +518,9 @@ def export_file(context, exported, settings, report):
                     exported.lod_specs.append((group.asset_name, lod_nodes))
             elif group.kind == KIND_SKELETAL:
                 bone_axes = bone_axes_for(group.armature, settings)
-                assets, lod_nodes = _stage_skeletal_group(st, group, settings, lod_mode, node_names, report)
+                assets, lod_nodes = _stage_skeletal_group(
+                    st, group, settings, lod_mode, node_names, report, exported.shape_key_names
+                )
                 exported.assets.extend(assets)
                 if lod_nodes:  # always a LOD group: skeletal sockets are bones, nothing inside the group gets lost
                     exported.lod_specs.append((f"{group.asset_name}_LodGroup", lod_nodes))
@@ -525,7 +533,9 @@ def export_file(context, exported, settings, report):
                 exported.material_names.update(renames)
             elif group.kind == KIND_ANIMATION:
                 bone_axes = bone_axes_for(group.armature, settings)
-                exported.assets.extend(_stage_anim_group(st, group, settings, node_names, report))
+                exported.assets.extend(
+                    _stage_anim_group(st, group, settings, node_names, report, exported.shape_key_names)
+                )
                 exported.has_armature = True
                 exported.extra["fps"] = st.temp_scene.render.fps / st.temp_scene.render.fps_base
                 exported.extra["frame_start"], exported.extra["frame_end"] = [int(v) for v in group.frame_range]
@@ -555,6 +565,7 @@ def export_file(context, exported, settings, report):
         report=report,
         bone_axes_map=axes_map_text,
         material_names=exported.material_names,
+        shape_key_names=exported.shape_key_names,
     )
     exported.extra["bone_axes"] = f"{bone_axes[0]}{bone_axes[1]}"
     if axes_map_text:
@@ -582,6 +593,19 @@ def unreal_material_slots(objects, report):
             if material in used and material not in renames and slot not in slots:
                 renames[material], slots[slot] = slot, path
     return renames, slots
+
+
+def _record_shape_key_names(key_names, node, mesh, report):
+    """Full names of the shape keys of ``mesh`` that Blender shortened on import, for the post-pass."""
+    if not mesh.morenn.shape_key_names:
+        return
+    try:
+        value = json.loads(mesh.morenn.shape_key_names)
+    except ValueError:
+        report.warning(f"'{mesh.name}': stored shape key names are not valid JSON; the shortened names are exported")
+        return
+    if isinstance(value, dict) and value:
+        key_names[node] = value
 
 
 def unreal_settings(action, report):

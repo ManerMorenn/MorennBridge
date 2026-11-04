@@ -80,6 +80,11 @@ class MORENN_PG_object(bpy.types.PropertyGroup):
         description="Slot and material asset of each Blender material, recorded by a pull (JSON). A push names the "
         "materials after the slots and gives them their material again",
     )
+    shape_key_names: StringProperty(
+        name="Full shape key names",
+        description="Names of imported shape keys that Blender cut to 63 bytes, shortened name to full name (JSON). "
+        "The export writes the full names",
+    )
 
 
 class MORENN_PG_armature(bpy.types.PropertyGroup):

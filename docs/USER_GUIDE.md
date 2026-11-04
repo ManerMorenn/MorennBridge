@@ -141,6 +141,8 @@ meshes, animations), binary or ASCII. Compared with Blender's stock importer:
   *Deform / IK / Helpers*, and the per-bone axis is stored and shown in the Armature panel;
 - the armature is named after the asset, meshes `<Asset>_Mesh`, `UCX_` meshes become wire collision objects
   parented to their mesh, Unreal LOD groups become LOD chains, the action is renamed after the file;
+- Blender keeps 63 bytes of a name, and some morph targets have longer names (MetaHuman faces have some): their
+  shape keys get Blender's shortened names, and the export writes the full names again;
 - data arrives in centimetres; a metre scene is rescaled automatically (the panel suggests running the scene setup
   first).
 

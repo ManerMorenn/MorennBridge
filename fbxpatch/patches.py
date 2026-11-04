@@ -331,6 +331,58 @@ def model_tree(root):
     return out
 
 
+def _blend_shapes(root):
+    """``[(mesh model, [(channel, [shape geometries])])]``, in connection order (model -> geometry -> blend shape ->
+    channel -> shape). Each object is listed once: Unreal's exporter repeats these connections hundreds of times."""
+    subclass = {}
+    for e in I.objects(root):
+        if e.id in (b"Geometry", b"Deformer") and e.props:
+            subclass[e.props[0]] = (I.object_subclass(e), e)
+    kids = {}
+    for kind, child, parent, _prop, _e in I.connections(root):
+        if kind == b"OO":
+            kids.setdefault(parent, {})[child] = None
+
+    def of(parent, wanted):
+        return [subclass[c][1] for c in kids.get(parent, ()) if subclass.get(c, (None,))[0] == wanted]
+
+    out = []
+    for model in I.find_objects(root, b"Model", subclass=b"Mesh"):
+        channels = {}
+        for geometry in of(I.object_id(model), b"Mesh"):
+            for deformer in of(I.object_id(geometry), b"BlendShape"):
+                for channel in of(I.object_id(deformer), b"BlendShapeChannel"):
+                    channels.setdefault(I.object_id(channel), (channel, of(I.object_id(channel), b"Shape")))
+        if channels:
+            out.append((model, list(channels.values())))
+    return out
+
+
+def _text(elem):
+    return I.object_name(elem).decode("utf-8", "replace")
+
+
+def blend_shape_names(root):
+    """``{mesh node name: [blend shape channel names in order]}``."""
+    return {_text(model): [_text(c) for c, _shapes in channels] for model, channels in _blend_shapes(root)}
+
+
+def rename_blend_shapes(root, per_node):
+    """``per_node``: ``{mesh node name: {channel name: new name}}``. Renames the channels of that mesh and their
+    shapes."""
+    result = PatchResult()
+    for model, channels in _blend_shapes(root):
+        mapping = per_node.get(_text(model)) or {}
+        for channel, shapes in channels:
+            new = mapping.get(_text(channel))
+            if not new:
+                continue
+            for elem in [channel] + [s for s in shapes if _text(s) == _text(channel)]:
+                elem.props[1] = join_name_class(_b(new), split_name_class(elem.props[1])[1])
+            result.changed = True
+    return result
+
+
 def bind_matrices(root):
     """``{node name: 16 floats}``: each bone's bind matrix, column-major (cluster TransformLink, else the bind pose)."""
     names = {I.object_id(m): I.object_name(m).decode("utf-8", "replace") for m in I.find_objects(root, b"Model")}

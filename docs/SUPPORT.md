@@ -23,6 +23,8 @@ editor that speaks the same protocol.
 - Hair curves, point clouds, volumes and Grease Pencil objects cannot be exported as meshes. They are listed in the
   Log.
 - Shape key animation is not exported. Shape keys themselves are.
+- Blender keeps 63 bytes of a name. Shape keys imported with longer names are shortened in Blender, and the export
+  writes their full names again. A shape key you rename gets the new name.
 - Importing an animation creates a new rig. It cannot be applied to an existing one yet.
 - Motion of the armature object is never exported (`E002`).
 - ASCII FBX files import, but their LOD groups and bone axis markers are not read. Binary is the better choice.
