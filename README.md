@@ -110,5 +110,5 @@ Windows and macOS, measures coverage, and installs the built zip into a clean pr
 the release page; pushes to `main` redeploy the documentation site. See [CONTRIBUTING.md](CONTRIBUTING.md) and
 [CHANGELOG.md](CHANGELOG.md).
 
-License: GPL-3.0-or-later (the add-on bundles Blender's GPL FBX reader and writer). See [NOTICE.md](NOTICE.md) for
-what the license does not cover.
+License: GPL-3.0-or-later (the add-on bundles Blender's GPL FBX reader and writer). The scripts that run inside the
+Unreal Editor (`ue/scripts`) are under the MIT License. See [NOTICE.md](NOTICE.md) for what the license does not cover.

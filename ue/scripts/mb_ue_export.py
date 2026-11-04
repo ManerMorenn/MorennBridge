@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Export Unreal assets (selected in the Content Browser, or given by path) to FBX for MorennBridge.
 
 Run inside UE:  mb_ue_export.py "<out_dir>" ["/Game/Path/Asset" ...]

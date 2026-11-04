@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Import the files listed in a MorennBridge manifest into the Unreal Editor.
 
 Run inside UE:  mb_ue_import.py "<path/to/batch.morenn.json>"

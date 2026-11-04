@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Shared helpers for the scripts MorennBridge runs inside the Unreal Editor's Python."""
 
 import json
