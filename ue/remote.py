@@ -200,28 +200,37 @@ class RemoteSession:
         return list(found.values())
 
     # ------------------------------------------------------------------ command connection
-    def connect(self, node, timeout=5.0):
-        """Ask ``node`` to connect to our TCP listener."""
+    def connect(self, node, timeout=5.0, resend_interval=1.0):
+        """Ask ``node`` to connect to our TCP listener.
+
+        ``open_connection`` travels by UDP and can be lost, so it is sent again every ``resend_interval`` seconds
+        until the editor connects; the editor ignores a repeat once it is connected to this listener.
+        """
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._listener.bind((self.command_ip, 0))
         self._listener.listen(1)
-        self._listener.settimeout(timeout)
         port = self._listener.getsockname()[1]
-        self._send_udp(
-            _message(
-                TYPE_OPEN, self.node_id, dest=node.node_id, data={"command_ip": self.command_ip, "command_port": port}
-            )
+        request = _message(
+            TYPE_OPEN, self.node_id, dest=node.node_id, data={"command_ip": self.command_ip, "command_port": port}
         )
-        try:
-            conn, _addr = self._listener.accept()
-        except TimeoutError as exc:
-            self._listener.close()
-            self._listener = None
-            raise RemoteError(
-                f"Unreal ({node.label}) did not connect back within {timeout:g}s; "
-                "check 'Enable Remote Execution' and the bind address"
-            ) from exc
+        deadline = time.monotonic() + timeout
+        conn = None
+        while conn is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._listener.close()
+                self._listener = None
+                raise RemoteError(
+                    f"Unreal ({node.label}) did not connect back within {timeout:g}s; "
+                    "check 'Enable Remote Execution' and the bind address"
+                )
+            self._send_udp(request)
+            self._listener.settimeout(min(resend_interval, remaining))
+            try:
+                conn, _addr = self._listener.accept()
+            except TimeoutError:
+                pass
         conn.setblocking(True)
         self._conn = conn
         self.connected_node = node

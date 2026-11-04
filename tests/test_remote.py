@@ -21,7 +21,12 @@ GROUP, PORT = "239.0.0.1", 6799  # a test port so a real editor is never disturb
 
 
 class FakeUnrealNode(threading.Thread):
-    """Answers ping with pong, connects back on open_connection, echoes commands."""
+    """Answers ping with pong, connects back on open_connection, echoes commands.
+
+    Like OpenCommandConnection in PythonScriptRemoteExecution.cpp, an open_connection is ignored while connected to
+    the same node and endpoint. ``drop_opens`` loses that many open_connection messages; ``connect_delay`` delays
+    the connection back.
+    """
 
     def __init__(self):
         super().__init__(daemon=True)
@@ -31,6 +36,11 @@ class FakeUnrealNode(threading.Thread):
         self.success = True
         self.output = [{"type": "Info", "output": "hello from fake UE"}]
         self.delay = 0.0
+        self.drop_opens = 0
+        self.connect_delay = 0.0
+        self.opens = 0
+        self.connections = 0
+        self.endpoint = None
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if hasattr(socket, "SO_REUSEPORT"):
@@ -81,13 +91,32 @@ class FakeUnrealNode(threading.Thread):
                     },
                 )
             elif msg["type"] == "open_connection":
-                d = msg["data"]
-                self.tcp = socket.create_connection((d["command_ip"], d["command_port"]), timeout=2.0)
-                self.tcp.settimeout(0.1)
+                self._open(msg)
             elif msg["type"] == "close_connection":
-                if self.tcp is not None:
-                    self.tcp.close()
-                    self.tcp = None
+                self._close()
+
+    def _open(self, msg):
+        self.opens += 1
+        if self.drop_opens > 0:
+            self.drop_opens -= 1
+            return
+        endpoint = (msg["source"], msg["data"]["command_ip"], msg["data"]["command_port"])
+        if self.tcp is not None and self.endpoint == endpoint:
+            return
+        self._close()
+        time.sleep(self.connect_delay)
+        try:
+            self.tcp = socket.create_connection(endpoint[1:], timeout=2.0)
+        except OSError:
+            return
+        self.tcp.settimeout(0.1)
+        self.endpoint = endpoint
+        self.connections += 1
+
+    def _close(self):
+        if self.tcp is not None:
+            self.tcp.close()
+        self.tcp = self.endpoint = None
 
     def _serve_tcp(self):
         if self.tcp is None:
@@ -97,7 +126,7 @@ class FakeUnrealNode(threading.Thread):
         except TimeoutError:
             return
         except OSError:
-            self.tcp = None
+            self.tcp = self.endpoint = None
             return
         if not raw:
             return
@@ -188,6 +217,37 @@ class RemoteProtocolTests(unittest.TestCase):
             self.assertEqual(res.result, "42")
         time.sleep(0.3)
         self.assertIsNone(self.fake.tcp)
+
+    def discovered(self):
+        session = self.remote.RemoteSession(GROUP, PORT, "0.0.0.0", "127.0.0.1").__enter__()
+        self.addCleanup(session.close)
+        return session, session.discover(timeout=2.0, ping_interval=0.3)[0]
+
+    def test_lost_open_connection_is_sent_again(self):
+        session, node = self.discovered()
+        self.fake.drop_opens = 2
+        session.connect(node, timeout=3.0, resend_interval=0.1)
+        self.assertEqual(session.evaluate("1+41", timeout=5.0).result, "42")
+        self.assertGreaterEqual(self.fake.opens, 3)
+        self.assertEqual(self.fake.connections, 1)
+
+    def test_late_connection_back_is_made_once(self):
+        """The repeats sent while the editor was connecting are ignored, as Unreal does: the session keeps working."""
+        session, node = self.discovered()
+        self.fake.connect_delay = 0.5
+        session.connect(node, timeout=3.0, resend_interval=0.1)
+        self.assertEqual(session.evaluate("1+41", timeout=5.0).result, "42")
+        self.assertGreater(self.fake.opens, 1)
+        self.assertEqual(self.fake.connections, 1)
+
+    def test_no_connection_back_within_the_timeout(self):
+        session, node = self.discovered()
+        self.fake.drop_opens = 1000
+        started = time.monotonic()
+        with self.assertRaisesRegex(self.remote.RemoteError, "did not connect back within 0.6s"):
+            session.connect(node, timeout=0.6, resend_interval=0.1)
+        self.assertGreaterEqual(time.monotonic() - started, 0.6)
+        self.assertGreaterEqual(self.fake.opens, 3)
 
     def test_commands_need_a_connection(self):
         session = self.remote.RemoteSession(GROUP, PORT, "0.0.0.0", "127.0.0.1")
