@@ -331,6 +331,25 @@ def model_tree(root):
     return out
 
 
+def bind_matrices(root):
+    """``{node name: 16 floats}``: each bone's bind matrix, column-major (cluster TransformLink, else the bind pose)."""
+    names = {I.object_id(m): I.object_name(m).decode("utf-8", "replace") for m in I.find_objects(root, b"Model")}
+    clusters = {I.object_id(c): c for c in I.find_objects(root, b"Deformer", subclass=b"Cluster")}
+    out = {}
+    for kind, child, parent, _prop, _e in I.connections(root):
+        if kind == b"OO" and child in names and parent in clusters and names[child] not in out:
+            link = clusters[parent].find(b"TransformLink")
+            if link is not None and link.props and len(link.props[0]) == 16:
+                out[names[child]] = tuple(float(v) for v in link.props[0])
+    for pose in I.find_objects(root, b"Pose"):
+        for node in pose.find_all(b"PoseNode"):
+            ref, matrix = node.find(b"Node"), node.find(b"Matrix")
+            name = names.get(ref.props[0]) if ref is not None and ref.props else None
+            if name and name not in out and matrix is not None and matrix.props and len(matrix.props[0]) == 16:
+                out[name] = tuple(float(v) for v in matrix.props[0])
+    return out
+
+
 def lod_levels(root):
     """``{node name: LOD index}`` for the models under each LodGroup: a level's node and everything below it.
 

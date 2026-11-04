@@ -24,6 +24,7 @@ class ImportInfo:
     root_bones: list = field(default_factory=list)
     lod_groups: list = field(default_factory=list)
     lod_levels: dict = field(default_factory=dict)  # node name -> LOD index, for everything under a LOD group
+    bind_matrices: dict = field(default_factory=dict)  # bone name -> bind matrix (16 floats, column-major)
     anim_stacks: list = field(default_factory=list)
     anim_ranges: list = field(default_factory=list)  # (start, stop) seconds per stack, None when not stored
     has_skin: bool = False
@@ -74,6 +75,7 @@ def analyze(root):
     info.root_bones = patches.root_bone_names(root)
     info.lod_groups = patches.lod_groups(root)
     info.lod_levels = patches.lod_levels(root)
+    info.bind_matrices = patches.bind_matrices(root)
     stacks = I.anim_stacks(root)
     info.anim_stacks = [I.object_name(s).decode("utf-8", "replace") for s in stacks]
     info.anim_ranges = [_stack_range(s) for s in stacks]
@@ -232,6 +234,13 @@ def _decide_axes(arm, info, prefs, report):
 
 def _post_process_armature(context, arm, result, prefs, report, convert_axes, reset_pose, stem):
     info = result.info
+    if info.bind_matrices:
+        changed, worst = bones.snap_rest_to_bind(context, arm, info.bind_matrices)
+        if changed and worst >= 0.001:
+            report.info(
+                f"'{arm.name}': {changed} bone(s) set to the file's exact rest rotation "
+                f"(Blender's importer was up to {worst:.3f}° off)"
+            )
     primary, secondary, source = _decide_axes(arm, info, prefs, report)
     default = (primary, secondary)
     converted = False

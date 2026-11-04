@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import math
 import os
 import unittest
 
 import bpy
+from mathutils import Matrix
 
 from tests import fixtures
 from tests.test_export_anim import _animated_character
@@ -132,6 +134,38 @@ class ImportUETests(unittest.TestCase):
         self.assertFalse(
             self.import_fbx.import_file(bpy.context, done[0].path, self.prefs, report).actions[0].use_frame_range
         )
+
+    def test_rest_rotations_snap_to_the_bind_matrices(self):
+        """Within the tolerance a bone takes the file's exact rotation; poses and keys of its children do not move."""
+        bones = fixtures.addon_module("core.bones")
+        rig, _body = _animated_character()
+        scene = bpy.context.scene
+
+        def posed(frame):
+            scene.frame_set(frame)
+            bpy.context.view_layer.update()
+            return {pb.name: pb.matrix.copy() for pb in rig.pose.bones}
+
+        before = {frame: posed(frame) for frame in (1, 12, 24)}
+        binds = {}
+        for bone in rig.data.bones:
+            m = rig.matrix_world @ bone.matrix_local
+            turn = {"bone_01": 0.2, "bone_02": 5.0}.get(bone.name, 0.0)  # bone_02 is beyond the tolerance
+            m = m @ Matrix.Rotation(math.radians(turn), 4, "Y")
+            binds[bone.name] = tuple(m[r][c] for c in range(4) for r in range(4))
+        with bpy.context.temp_override(**fixtures.addon_module("compat").window_override()):
+            changed, worst = bones.snap_rest_to_bind(bpy.context, rig, binds)
+        self.assertEqual(changed, 1)
+        self.assertAlmostEqual(worst, 0.2, places=3)
+        want = (rig.matrix_world @ bones._fbx_matrix(binds["bone_01"])).to_3x3().normalized()
+        got = rig.data.bones["bone_01"].matrix_local.to_3x3().normalized()
+        self.assertLess(math.degrees(bones.rotation_angle(want.transposed() @ got)), 1e-3)
+        for frame, matrices in before.items():
+            after = posed(frame)
+            for name, m in matrices.items():
+                for i in range(4):
+                    for j in range(4):
+                        self.assertAlmostEqual(after[name][i][j], m[i][j], places=3, msg=f"{name} @ {frame}")
 
     def test_skeletal_lods_from_unreal_become_lod_objects(self):
         """Unreal writes a skeletal mesh's LODs as skinned meshes under one LOD group, last LOD first in the scene."""
