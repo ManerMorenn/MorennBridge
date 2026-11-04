@@ -310,6 +310,24 @@ class ExportTimeCodeTests(unittest.TestCase):
         self.assertIn("E012", fixtures.report_text(report))
         self.assertTrue(fixtures.no_temp_leftovers()[0])
 
+    def test_shape_keys_are_read_as_stored_without_other_modifiers(self):
+        """Fast path (no modifier besides Armature) and evaluated path (one key at a time) give the same keys."""
+        staging = fixtures.addon_module("core.staging")
+        cube = fixtures.make_cube("Face", size=2.0)
+        cube.shape_key_add(name="Basis")
+        smile = cube.shape_key_add(name="Smile")
+        for point in smile.data:
+            point.co.z += 0.5
+        with staging.Staging(bpy.context, fixtures.addon_module("core.log").Report()) as st:
+            _mesh, direct = st.evaluate_source_mesh(cube)
+            cube.modifiers.new("Nothing", "DISPLACE").strength = 0.0  # moves nothing, forces one evaluation per key
+            _mesh, evaluated = st.evaluate_source_mesh(cube)
+        self.assertEqual([s["name"] for s in direct], ["Basis", "Smile"])
+        self.assertEqual(len(direct[1]["co"]), len(evaluated[1]["co"]))
+        for a, b in zip(direct[1]["co"], evaluated[1]["co"]):
+            self.assertAlmostEqual(float(a), float(b), places=5)
+        self.assertTrue(fixtures.no_temp_leftovers()[0])
+
     def test_e020_combined_file_with_the_legacy_importer(self):
         cubes = [fixtures.make_cube("A"), fixtures.make_cube("B")]
         done, _manifest, report = fixtures.run_export(cubes, self.tmp, file_mode="COMBINED", ue_importer="LEGACY")

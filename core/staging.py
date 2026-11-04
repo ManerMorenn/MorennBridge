@@ -260,27 +260,35 @@ class Staging:
                 self.datablocks.append(me)
                 return me, []
             target.show_only_shape_key = True
-            evaluated = []
-            for i, _kb in enumerate(keys.key_blocks):
-                target.active_shape_key_index = i
-                dg.update()
-                m = bpy.data.meshes.new_from_object(
-                    target.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg
-                )
-                evaluated.append(m)
-            base = evaluated[0]
+            target.active_shape_key_index = 0
+            dg.update()
+            base = bpy.data.meshes.new_from_object(
+                target.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg
+            )
             self.datablocks.append(base)
             n = len(base.vertices)
-            if any(len(m.vertices) != n for m in evaluated[1:]):
-                for m in evaluated[1:]:
-                    bpy.data.meshes.remove(m)
-                raise StagingError(
-                    f"'{src.name}': a modifier changes the vertex count, shape keys cannot be preserved (E012)"
-                )
-            specs = [{"name": keys.key_blocks[0].name, "co": None, "relative": None}]
-            for kb, m in zip(keys.key_blocks[1:], evaluated[1:]):
+            shaping = [m for m in target.modifiers if m not in added and m.type != "ARMATURE" and m.show_viewport]
+            coords = []
+            for i, kb in enumerate(keys.key_blocks[1:], start=1):
                 buf = np.empty(n * 3, dtype=np.float32)
-                m.vertices.foreach_get("co", buf)
+                if not shaping and len(kb.data) == n:  # nothing else moves vertices: the key holds the result
+                    kb.data.foreach_get("co", buf)
+                else:  # one evaluation per key (slow with many keys, e.g. a MetaHuman face)
+                    target.active_shape_key_index = i
+                    dg.update()
+                    m = bpy.data.meshes.new_from_object(
+                        target.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg
+                    )
+                    if len(m.vertices) != n:
+                        bpy.data.meshes.remove(m)
+                        raise StagingError(
+                            f"'{src.name}': a modifier changes the vertex count, shape keys cannot be preserved (E012)"
+                        )
+                    m.vertices.foreach_get("co", buf)
+                    bpy.data.meshes.remove(m)
+                coords.append(buf)
+            specs = [{"name": keys.key_blocks[0].name, "co": None, "relative": None}]
+            for kb, buf in zip(keys.key_blocks[1:], coords):
                 specs.append(
                     {
                         "name": kb.name,
@@ -293,7 +301,6 @@ class Staging:
                         "relative": kb.relative_key.name,
                     }
                 )
-                bpy.data.meshes.remove(m)
             return base, specs
         finally:
             for mod in added:
