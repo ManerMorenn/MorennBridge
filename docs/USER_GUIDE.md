@@ -161,7 +161,8 @@ in Unreal's Content Browser and imports them here. Blender's *Allow Online Acces
 
 FBX has no place for the settings of an Unreal animation asset (root motion, root lock, retarget source, rate
 scale, looping, additive settings). Pull stores them on the Blender action, and pushing that action sets them on
-the new asset again.
+the new asset again. Material slots work the same way: Unreal's FBX names materials after the material assets,
+so Pull records each slot and its material, and a push restores both, also when it replaces the original asset.
 
 *Push to Unreal after export* needs an editor in the list, so press **Find Unreal** first; otherwise the Log says the
 push was skipped. Blender stays usable while Unreal imports: the panel shows the status, and the Log gets the

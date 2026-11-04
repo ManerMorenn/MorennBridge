@@ -318,9 +318,8 @@ def compare_skeletal(case, name, exp):
     got = vec(bounds.origin) + vec(bounds.box_extent)
     wanted = vec(ref_bounds.origin) + vec(ref_bounds.box_extent)
     case.check(close(got, wanted, 0.1), f"{name}: bounds", f"{got}, original {wanted}")
-    slots = len(mesh.get_editor_property("materials"))
-    ref_slots = len(reference.get_editor_property("materials"))
-    case.check(slots == ref_slots, f"{name}: material slots", f"{slots}, original {ref_slots}")
+    slots, ref_slots = common.material_slots(mesh), common.material_slots(reference)
+    case.check(slots == ref_slots, f"{name}: material slots and materials", f"{slots}, original {ref_slots}")
 
 
 def compare_animation(case, name, exp):

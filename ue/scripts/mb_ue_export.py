@@ -75,6 +75,8 @@ def export_asset(asset, out_dir):
         "success": bool(ok) and os.path.exists(filename),
         "errors": [str(e) for e in task.get_editor_property("errors")],
     }
+    if cls in ("StaticMesh", "SkeletalMesh"):  # the FBX names materials after the material assets, not the slots
+        item["materials"] = C.material_slots(asset)
     if cls == "SkeletalMesh":
         skel = C.getp(asset, "skeleton")
         item["skeleton"] = C.asset_path(skel) if skel is not None else None

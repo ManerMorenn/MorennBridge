@@ -75,6 +75,11 @@ class MORENN_PG_object(bpy.types.PropertyGroup):
     lod_of: PointerProperty(name="LOD of", type=bpy.types.Object)
     collision_of: PointerProperty(name="Collision of", type=bpy.types.Object)
     collision_type: EnumProperty(name="Collision type", items=COLLISION_TYPE_ITEMS, default="UCX")
+    ue_materials: StringProperty(
+        name="Unreal material slots",
+        description="Slot and material asset of each Blender material, recorded by a pull (JSON). A push names the "
+        "materials after the slots and gives them their material again",
+    )
 
 
 class MORENN_PG_armature(bpy.types.PropertyGroup):

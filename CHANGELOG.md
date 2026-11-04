@@ -13,4 +13,5 @@ First public version. Requires Blender 4.5 or newer.
   hierarchy clean-up.
 - Pre-flight validation with automatic fixes, documented issue codes and an Export Anyway button.
 - Unreal Link: Python remote execution client and editor-side import/export scripts (experimental, not yet verified
-  against a live editor). Unreal-only animation settings (root motion, retarget source…) survive a pull and push.
+  against a live editor). Unreal-only animation settings (root motion, retarget source…) and material slots
+  survive a pull and push.

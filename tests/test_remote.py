@@ -419,6 +419,23 @@ class UnrealOperatorTests(unittest.TestCase):
         self.assertEqual(json.loads(bpy.data.actions["A_Hero_Run"].morenn.ue_settings), jog)
         self.assertIn("Unreal animation settings kept on A_Hero_Run for the next push", fixtures.log_text())
 
+    def test_pull_keeps_the_unreal_material_slots(self):
+        self.start_fake_editor()
+        done, _manifest, report = fixtures.run_export([fixtures.make_cube("Crate")], self.tmp)
+        fixtures.fresh_scene(cm=True)
+        self.scene.morenn.export_dir = self.tmp
+        out = os.path.join(self.tmp, "from_unreal")
+        os.makedirs(out)
+        slots = [{"slot": "Wood", "material": "/Game/Props/M_Test"}, {"slot": "Unused", "material": None}]
+        with open(os.path.join(out, "pull.result.json"), "w", encoding="utf-8") as fh:
+            json.dump({"items": [{"file": done[0].path, "success": True, "materials": slots}]}, fh)
+        fixtures.call(bpy.ops.morenn.ue_pull)
+        crate = bpy.data.objects["SM_Crate"]
+        recorded = json.loads(crate.morenn.ue_materials)
+        self.assertEqual(list(recorded.values()), [["Wood", "/Game/Props/M_Test"]])
+        self.assertEqual(list(recorded), [m.name for m in crate.data.materials])
+        self.assertIn("Unreal material slots kept on SM_Crate", fixtures.log_text())
+
     def test_push_lists_the_animation_settings_set_again(self):
         self.start_fake_editor()
         manifest = self.export_cube()

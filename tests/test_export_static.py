@@ -154,6 +154,21 @@ class StaticExportTests(unittest.TestCase):
                 warned = "ignores sockets inside FBX LOD groups" in fixtures.report_text(report)
                 self.assertEqual(warned, socket_warning)
 
+    def test_pulled_material_slots_name_the_fbx_materials(self):
+        crate = fixtures.make_cube("Crate", size=40.0)
+        material = crate.data.materials[0].name
+        crate.morenn.ue_materials = json.dumps({material: ["Wood", "/Game/Props/M_Oak"], "Gone": ["Other", "/X/Y"]})
+        done, manifest_path, report = fixtures.run_export([crate], self.tmp)
+        self.assertTrue(report.ok, fixtures.report_text(report))
+        self.assertEqual(fixtures.fbx_materials(fixtures.fbx_load(done[0].path)[0]), {"Wood"})
+        self.assertEqual(crate.data.materials[0].name, material)  # the Blender material keeps its name
+        with open(manifest_path, encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["items"][0]["assets"][0]["ue_materials"], {"Wood": "/Game/Props/M_Oak"})
+        crate.morenn.ue_materials = "{broken"
+        done, manifest_path, report = fixtures.run_export([crate], self.tmp)
+        self.assertIn("stored Unreal material slots are not valid JSON", fixtures.report_text(report))
+        self.assertEqual(fixtures.fbx_materials(fixtures.fbx_load(done[0].path)[0]), {material})
+
     def test_box_collision_is_written_side_by_side(self):
         """Unreal's legacy AddBoxGeomFromTris compares later faces of an axis with the second plane only."""
         crate = fixtures.make_cube("Crate", size=100.0)

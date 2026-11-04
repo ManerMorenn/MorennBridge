@@ -234,16 +234,40 @@ class PhysicsAsset(Object):
     pass
 
 
-class Material(Object):
+class MaterialInterface(Object):
+    pass
+
+
+class Material(MaterialInterface):
+    pass
+
+
+class MaterialInstanceConstant(MaterialInterface):
+    pass
+
+
+class StaticMaterial(StructBase):
+    _props = {
+        "material_interface": Prop(MaterialInterface, None),
+        "material_slot_name": Prop(str, "None"),
+        "imported_material_slot_name": Prop(str, "None", read_only=True),
+    }
+
+
+class SkeletalMaterial(StaticMaterial):
     pass
 
 
 class StaticMesh(Object):
-    _props = {"complex_collision_mesh": Prop(Object, None)}
+    _props = {"complex_collision_mesh": Prop(Object, None), "static_materials": Prop(list, [])}
 
 
 class SkeletalMesh(Object):
-    _props = {"skeleton": Prop(Skeleton, None, read_only=True), "physics_asset": Prop(PhysicsAsset, None)}
+    _props = {
+        "skeleton": Prop(Skeleton, None, read_only=True),
+        "physics_asset": Prop(PhysicsAsset, None),
+        "materials": Prop(list, []),
+    }
 
 
 class AnimSequence(Object):
@@ -265,7 +289,10 @@ class AnimSequence(Object):
     }
 
 
-ASSET_CLASSES = {c.__name__: c for c in (StaticMesh, SkeletalMesh, AnimSequence, Skeleton, PhysicsAsset, Material)}
+ASSET_CLASSES = {
+    c.__name__: c
+    for c in (StaticMesh, SkeletalMesh, AnimSequence, Skeleton, PhysicsAsset, Material, MaterialInstanceConstant)
+}
 
 
 class SoftObjectPath(StructBase):
@@ -335,6 +362,16 @@ class EditorAssetLibrary:
         STATE.saved.append(_object_path(asset_to_save.get_path_name()))
         return True
 
+    @staticmethod
+    def list_assets(directory_path, recursive=True, include_folder=False):
+        folder = directory_path.rstrip("/")
+        found = [a.get_path_name() for p, a in STATE.assets.items() if p.rsplit("/", 1)[0] == folder]
+        return Array(found)
+
+    @staticmethod
+    def delete_asset(asset_path_to_delete):
+        return STATE.assets.pop(_object_path(asset_path_to_delete), None) is not None
+
 
 class EditorUtilityLibrary:
     @staticmethod
@@ -352,10 +389,19 @@ def _create_planned_assets(filename, destination_path):
     planned = STATE.plan.get(os.path.normcase(os.path.abspath(filename)))
     if planned is None:
         return None
-    created = [add_asset(class_name, f"{destination_path.rstrip('/')}/{name}") for class_name, name in planned]
+    folder = destination_path.rstrip("/")
+    created = [add_asset(entry[0], f"{folder}/{entry[1]}") for entry in planned]
     for mesh in (a for a in created if isinstance(a, SkeletalMesh)):  # the mesh links what was made for it
         for prop, cls in (("skeleton", Skeleton), ("physics_asset", PhysicsAsset)):
             mesh._values[prop] = next((a for a in created if isinstance(a, cls)), mesh._values[prop])
+    for entry, asset in zip(planned, created):  # optional third element: [(slot name, material asset name)]
+        if len(entry) > 2:
+            kind = SkeletalMaterial if isinstance(asset, SkeletalMesh) else StaticMaterial
+            prop = "materials" if isinstance(asset, SkeletalMesh) else "static_materials"
+            asset._values[prop] = [
+                kind(material_slot_name=slot, material_interface=STATE.assets.get(f"{folder}/{material}"))
+                for slot, material in entry[2]
+            ]
     return created
 
 

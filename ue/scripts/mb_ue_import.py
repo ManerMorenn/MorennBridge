@@ -305,7 +305,32 @@ def missing_assets(item, imported_paths):
     return [f"{folder}/{a['name']}" for a in item.get("assets", []) if f"{folder}/{a['name']}" not in imported_paths]
 
 
-def post_process(item, options, paths, report_item):
+def folder_assets(folder):
+    return {p.split(".")[0] for p in unreal.EditorAssetLibrary.list_assets(folder, recursive=False)}
+
+
+def restore_materials(item, paths, report_item, existed):
+    """Slots of a mesh pulled from Unreal get their material back; materials this push made for them are deleted."""
+    folder = item["destination_path"].rstrip("/")
+    replaced = set()
+    for a in item.get("assets", []):
+        mesh = C.load(f"{folder}/{a['name']}") if a.get("ue_materials") else None
+        if mesh is None:
+            continue
+        done, missing, old = C.set_material_slots(mesh, a["ue_materials"])
+        report_item.setdefault("materials", []).extend(done)
+        replaced.update(old)
+        for path in missing:
+            report_item["warnings"].append(f"{a['name']}: {path} not found; the slot keeps the imported material")
+    meshes = [m for m in (C.load(p) for p in paths) if m is not None and m.get_class().get_name().endswith("Mesh")]
+    in_use = {s["material"] for m in meshes for s in C.material_slots(m)}
+    for path in sorted(replaced - in_use - existed):
+        if path in paths and unreal.EditorAssetLibrary.delete_asset(path):
+            paths.remove(path)
+            report_item.setdefault("removed", []).append(path)
+
+
+def post_process(item, options, paths, report_item, existed=frozenset()):
     renames = []
     skeleton_path = None
     base = None
@@ -346,6 +371,7 @@ def post_process(item, options, paths, report_item):
             if render is not None and coll is not None:
                 if C.setp(render, "complex_collision_mesh", coll):
                     report_item["complex_collision"] = f"{folder}/{coll_name}"
+    restore_materials(item, paths, report_item, existed)
     if options.get("save", True):
         for path in paths:
             asset = C.load(path)
@@ -367,6 +393,7 @@ def import_item(item, options, use_interchange):
     }
     try:
         C.ensure_directory(item["destination_path"])
+        existed = folder_assets(item["destination_path"])
         if use_interchange:
             ok, paths = import_interchange(item, options)
         else:
@@ -378,7 +405,7 @@ def import_item(item, options, use_interchange):
         else:
             for path in missing_assets(item, paths):
                 report_item["warnings"].append(f"{path} was not created")
-            post_process(item, options, paths, report_item)
+            post_process(item, options, paths, report_item, existed)
     except Exception as exc:
         report_item["errors"].append(f"{exc!r}\n{C.exc_text()}")
         C.error(f"{item['file']}: {exc!r}")

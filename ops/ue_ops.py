@@ -10,7 +10,7 @@ import bpy
 from bpy.props import StringProperty
 
 from .. import compat
-from ..core import import_fbx
+from ..core import import_fbx, naming
 from ..core.log import Report, describe_error
 from ..prefs import get_prefs
 from ..ue import remote
@@ -267,6 +267,29 @@ class MORENN_OT_ue_push(RemoteJobOperator, bpy.types.Operator):
         return {"FINISHED"} if report.ok else {"CANCELLED"}
 
 
+def remember_unreal_materials(objects, slots, report):
+    """Map the Blender materials of a pulled mesh to its Unreal slots: Unreal's FBX names the materials after the
+    material assets, so the slot names would otherwise be lost."""
+    by_material = {}
+    for slot in slots or []:
+        if slot.get("material"):
+            by_material.setdefault(slot["material"].rsplit("/", 1)[-1], [slot["slot"], slot["material"]])
+    mapped = []
+    for obj in objects:
+        if obj.type != "MESH":
+            continue
+        found = {}
+        for material in obj.data.materials:
+            entry = by_material.get(naming.strip_numeric_suffix(material.name)) if material else None
+            if entry:
+                found[material.name] = entry
+        if found:
+            obj.morenn.ue_materials = json.dumps(found, sort_keys=True)
+            mapped.append(obj.name)
+    if mapped:
+        report.info(f"Unreal material slots kept on {', '.join(mapped)} for the next push")
+
+
 def remember_unreal_settings(actions, settings, report):
     """Keep the Unreal-only settings of a pulled animation on its actions, for the next push."""
     if not settings:
@@ -287,6 +310,10 @@ def _apply_ue_report(context, ue_report, report):
             report.error(f"UE failed on {item['file']}: {'; '.join(item.get('errors', []))[:300]}")
         if item.get("settings"):
             report.info(f"UE, {item['file']}: animation settings restored ({', '.join(item['settings'])})")
+        if item.get("materials"):
+            report.info(f"UE, {item['file']}: slots given their Unreal material again ({', '.join(item['materials'])})")
+        if item.get("removed"):
+            report.info(f"UE, {item['file']}: materials made by the import and no longer used were deleted")
         for warning in item.get("warnings", []):
             report.warning(f"UE, {item['file']}: {warning}")
         skeleton = item.get("skeleton")
@@ -352,6 +379,7 @@ class MORENN_OT_ue_pull(RemoteJobOperator, bpy.types.Operator):
                     if item.get("skeleton"):
                         arm.data.morenn.ue_skeleton_path = item["skeleton"]
                 remember_unreal_settings(res.actions, item.get("settings"), report)
+                remember_unreal_materials(res.meshes, item.get("materials"), report)
                 report.info(f"Imported {os.path.basename(item['file'])}", item["file"])
             except Exception as exc:
                 report.error(f"Import of {item['file']} failed: {describe_error(exc)}")

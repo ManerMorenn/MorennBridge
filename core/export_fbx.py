@@ -85,6 +85,7 @@ class ExportedFile:
     assets: list = field(default_factory=list)  # manifest asset entries
     node_names: list = field(default_factory=list)  # final FBX node names (Models)
     lod_specs: list = field(default_factory=list)
+    material_names: dict = field(default_factory=dict)  # Blender material -> Unreal slot of a pulled mesh
     single_asset: bool = True
     has_armature: bool = False
     extra: dict = field(default_factory=dict)
@@ -451,9 +452,21 @@ def run_exporter(st, kw, report):
         raise staging.StagingError(f"Blender's FBX exporter returned {result}")
 
 
-def post_process(path, name_map, bone_axes, strip_null, lod_specs, anim_stack_name=None, report=None, bone_axes_map=""):
+def post_process(
+    path,
+    name_map,
+    bone_axes,
+    strip_null,
+    lod_specs,
+    anim_stack_name=None,
+    report=None,
+    bone_axes_map="",
+    material_names=None,
+):
     root, version = tree.load(path)
     patches.rename_nodes(root, name_map)
+    if material_names:
+        patches.rename_nodes(root, material_names, classes=(b"Material",))
     patches.set_globalsettings_string(root, MARKER_AXES, f"{bone_axes[0]}{bone_axes[1]}")
     patches.set_globalsettings_string(root, MARKER_AXES_MAP, bone_axes_map or "")
     patches.set_globalsettings_string(root, MARKER_VERSION, __version__)
@@ -504,6 +517,12 @@ def export_file(context, exported, settings, report):
                 if lod_nodes:  # always a LOD group: skeletal sockets are bones, nothing inside the group gets lost
                     exported.lod_specs.append((f"{group.asset_name}_LodGroup", lod_nodes))
                 exported.has_armature = True
+            if group.kind in (KIND_STATIC, KIND_SKELETAL):
+                meshes = list(group.render) + [o for objs in group.lods.values() for o in objs]
+                renames, slots = unreal_material_slots(meshes, report)
+                if slots:
+                    assets[0]["ue_materials"] = slots
+                exported.material_names.update(renames)
             elif group.kind == KIND_ANIMATION:
                 bone_axes = bone_axes_for(group.armature, settings)
                 exported.assets.extend(_stage_anim_group(st, group, settings, node_names, report))
@@ -535,11 +554,34 @@ def export_file(context, exported, settings, report):
         anim_stack_name=exported.assets[0]["name"] if is_anim else None,
         report=report,
         bone_axes_map=axes_map_text,
+        material_names=exported.material_names,
     )
     exported.extra["bone_axes"] = f"{bone_axes[0]}{bone_axes[1]}"
     if axes_map_text:
         exported.extra["bone_axes_map"] = axes_map_text
     return exported
+
+
+def unreal_material_slots(objects, report):
+    """What a pull recorded on ``objects``: ``({Blender material: Unreal slot}, {slot: material asset path})``.
+
+    The FBX materials are named after the slots so that Unreal keeps the slot names; the push then gives each slot
+    its material asset again.
+    """
+    renames, slots = {}, {}
+    for obj in objects:
+        if not obj.morenn.ue_materials:
+            continue
+        try:
+            recorded = json.loads(obj.morenn.ue_materials)
+        except ValueError:
+            report.warning(f"'{obj.name}': stored Unreal material slots are not valid JSON; not sent")
+            continue
+        used = {m.name for m in obj.data.materials if m is not None}
+        for material, (slot, path) in recorded.items():
+            if material in used and material not in renames and slot not in slots:
+                renames[material], slots[slot] = slot, path
+    return renames, slots
 
 
 def unreal_settings(action, report):

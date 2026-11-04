@@ -424,7 +424,9 @@ def import_unreal_file(item):
     prefs = fixtures.addon_module("prefs").get_prefs()
     report = fixtures.addon_module("core.log").Report("smoke import")
     result = fixtures.addon_module("core.import_fbx").import_file(bpy.context, item["file"], prefs, report)
-    fixtures.addon_module("ops.ue_ops").remember_unreal_settings(result.actions, item.get("settings"), report)
+    ue_ops = fixtures.addon_module("ops.ue_ops")
+    ue_ops.remember_unreal_settings(result.actions, item.get("settings"), report)
+    ue_ops.remember_unreal_materials(result.meshes, item.get("materials"), report)
     if not report.ok:
         raise RuntimeError(f"import of {item['file']} failed: {fixtures.report_text(report)}")
     return result

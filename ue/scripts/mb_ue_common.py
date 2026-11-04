@@ -126,6 +126,46 @@ def apply_settings(asset, values, spec):
     return applied, failed
 
 
+def _slots_property(mesh):
+    return "materials" if mesh.get_class().get_name() == "SkeletalMesh" else "static_materials"
+
+
+def material_slots(mesh):
+    """``[{"slot": name, "material": path or None}]`` of a static or skeletal mesh, in slot order."""
+    out = []
+    for slot in getp(mesh, _slots_property(mesh)) or []:
+        material = getp(slot, "material_interface")
+        out.append(
+            {"slot": str(getp(slot, "material_slot_name")), "material": asset_path(material) if material else None}
+        )
+    return out
+
+
+def set_material_slots(mesh, wanted):
+    """Give the slots named in ``wanted`` (slot name -> material path) that material.
+
+    Returns ``(slots set, material paths not found, paths of the materials they replaced)``.
+    """
+    slots = list(getp(mesh, _slots_property(mesh)) or [])
+    done, missing, replaced = [], [], []
+    for slot in slots:
+        name = str(getp(slot, "material_slot_name"))
+        if not wanted.get(name):
+            continue
+        material = load(wanted[name])
+        if material is None:
+            missing.append(wanted[name])
+            continue
+        current = getp(slot, "material_interface")
+        if current is not None and asset_path(current) != wanted[name]:
+            replaced.append(asset_path(current))
+        setp(slot, "material_interface", material)
+        done.append(name)
+    if done:
+        setp(mesh, _slots_property(mesh), slots)
+    return done, missing, replaced
+
+
 def ensure_directory(content_path):
     lib = unreal.EditorAssetLibrary
     if not lib.does_directory_exist(content_path):

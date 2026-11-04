@@ -35,6 +35,9 @@ editor that speaks the same protocol.
 - Animation settings that exist only on the Unreal asset (root motion, root lock, retarget source, rate scale,
   looping, additive settings) are not part of FBX. Pull keeps them on the Blender action and a push of that action
   sets them again, as they were when pulled. Animations made in Blender get Unreal's defaults.
+- Unreal's FBX export names materials after the material assets, not after the slots. Pull keeps each mesh's slot
+  names and materials; a push names the FBX materials after the slots and gives each slot its material again,
+  deleting the copies the import made for them. Materials made in Blender become slots of the same name.
 
 ## FAQ
 

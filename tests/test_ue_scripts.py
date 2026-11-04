@@ -271,6 +271,42 @@ class InterchangeImportTests(UnrealScriptCase):
         self.assertEqual(asset.get_editor_property("rate_scale"), 0.5)
         self.assertIn("/Game/MB/A_Hero_Jog", U.STATE.saved)
 
+    def test_pulled_slots_get_their_material_back(self):
+        """The FBX materials carry the slot names; the push swaps the copies Interchange made for the originals."""
+        for name in ("MI_Manny_01", "MI_Manny_02"):
+            U.add_asset("MaterialInstanceConstant", f"/Game/Mats/{name}")
+        U.add_asset("MaterialInstanceConstant", "/Game/MB/M_Old")  # in the folder before the push
+        wanted = {
+            "M_HeadLegs": "/Game/Mats/MI_Manny_01",
+            "M_Torso": "/Game/Mats/MI_Manny_02",
+            "M_Old": "/Game/Mats/MI_Manny_01",
+            "M_Lost": "/Game/Gone/MI_Lost",
+        }
+        assets = [{"node": "SKM_Manny", "name": "SKM_Manny", "ue_materials": wanted}]
+        item = self.item("SKELETAL_MESH", "SKM_Manny", assets=assets, skeleton="/Game/MB/SKEL_Manny")
+        slots = [(s, s) for s in ("M_HeadLegs", "M_Torso", "M_New", "M_Old", "M_Lost")]
+        made = [("MaterialInstanceConstant", m) for m in ("M_HeadLegs", "M_Torso", "M_New", "M_Lost")]
+        U.plan_import(item["path"], made + [("SkeletalMesh", "SKM_Manny", slots)])
+        report, _ = self.import_manifest([item])
+        self.assertTrue(report["ok"], report)
+        result = report["items"][0]
+        self.assertEqual(result["materials"], ["M_HeadLegs", "M_Torso", "M_Old"])
+        self.assertEqual(result["removed"], ["/Game/MB/M_HeadLegs", "/Game/MB/M_Torso"])
+        self.assertEqual(
+            result["warnings"], ["SKM_Manny: /Game/Gone/MI_Lost not found; the slot keeps the imported material"]
+        )
+        self.assertNotIn("/Game/MB/M_HeadLegs", result["imported"])
+        mesh = U.load_asset("/Game/MB/SKM_Manny")
+        got = {
+            s.get_editor_property("material_slot_name"): s.get_editor_property("material_interface")
+            for s in mesh.get_editor_property("materials")
+        }
+        self.assertIs(got["M_HeadLegs"], U.load_asset("/Game/Mats/MI_Manny_01"))
+        self.assertIs(got["M_New"], U.load_asset("/Game/MB/M_New"))
+        self.assertIs(got["M_Lost"], U.load_asset("/Game/MB/M_Lost"))
+        for kept in ("/Game/MB/M_New", "/Game/MB/M_Lost", "/Game/MB/M_Old"):
+            self.assertTrue(U.EditorAssetLibrary.does_asset_exist(kept), kept)
+
     def test_settings_that_cannot_be_set_again_are_warnings(self):
         settings = {
             "enable_root_motion": True,
@@ -525,6 +561,22 @@ class ExportScriptTests(UnrealScriptCase):
         self.assertFalse(options.get_editor_property("force_front_x_axis"))
         self.assertTrue(options.get_editor_property("collision"))
         self.assert_no_property_warnings()
+
+    def test_material_slots_are_recorded(self):
+        material = U.add_asset("MaterialInstanceConstant", "/Game/Mats/MI_Manny_01")
+        mesh = U.add_asset("SkeletalMesh", "/Game/MB/SKM_Manny")
+        mesh._values["materials"] = [
+            U.SkeletalMaterial(material_slot_name="M_HeadLegs", material_interface=material),
+            U.SkeletalMaterial(material_slot_name="M_Empty"),
+        ]
+        crate = U.add_asset("StaticMesh", "/Game/MB/SM_Crate")
+        crate._values["static_materials"] = [U.StaticMaterial(material_slot_name="Wood", material_interface=material)]
+        report = self.load("mb_ue_export").run(self.tmp, ["/Game/MB/SKM_Manny", "/Game/MB/SM_Crate"])
+        self.assertEqual(
+            report["items"][0]["materials"],
+            [{"slot": "M_HeadLegs", "material": "/Game/Mats/MI_Manny_01"}, {"slot": "M_Empty", "material": None}],
+        )
+        self.assertEqual(report["items"][1]["materials"], [{"slot": "Wood", "material": "/Game/Mats/MI_Manny_01"}])
 
     def test_unreal_only_animation_settings_are_recorded(self):
         mesh = U.add_asset("SkeletalMesh", "/Game/Characters/SKM_Hero")
