@@ -3,6 +3,7 @@
 
 import json
 import os
+import select
 import socket
 import struct
 import threading
@@ -25,13 +26,16 @@ class FakeUnrealNode(threading.Thread):
 
     Like OpenCommandConnection in PythonScriptRemoteExecution.cpp, an open_connection is ignored while connected to
     the same node and endpoint. ``drop_opens`` loses that many open_connection messages; ``connect_delay`` delays
-    the connection back.
+    the connection back; ``delay`` delays each answer.
+
+    The thread sleeps in ``select`` and only runs Python while it answers a message: Blender 4.5 and 5.0 can crash
+    in an export while another Python thread holds the GIL. ``close()`` wakes it through a socket pair (``select``
+    on Windows takes sockets only) and closes its sockets.
     """
 
     def __init__(self):
         super().__init__(daemon=True)
         self.node_id = "fake-ue-node"
-        self.stop = threading.Event()
         self.commands = []
         self.success = True
         self.output = [{"type": "Info", "output": "hello from fake UE"}]
@@ -51,8 +55,17 @@ class FakeUnrealNode(threading.Thread):
         self.udp.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton("127.0.0.1"))
         self.udp.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack("b", 0))
         self.udp.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
-        self.udp.settimeout(0.1)
+        self.udp.setblocking(False)
         self.tcp = None
+        self._wake, self._waker = socket.socketpair()
+
+    def close(self):
+        self._waker.send(b"x")
+        if self.is_alive():
+            self.join(timeout=2.0)
+        for sock in (self.udp, self.tcp, self._wake, self._waker):
+            if sock is not None:
+                sock.close()
 
     def _send(self, msg_type, dest, data=None):
         msg = {"version": 1, "magic": "ue_py", "type": msg_type, "source": self.node_id, "dest": dest}
@@ -61,39 +74,49 @@ class FakeUnrealNode(threading.Thread):
         self.udp.sendto(json.dumps(msg, separators=(",", ":")).encode(), (GROUP, PORT))
 
     def run(self):
-        while not self.stop.is_set():
-            try:
-                raw, _ = self.udp.recvfrom(65536)
-            except TimeoutError:
+        while True:
+            sockets = [self._wake, self.udp] + ([self.tcp] if self.tcp is not None else [])
+            readable = select.select(sockets, [], [])[0]
+            if self._wake in readable:
+                return
+            if self.udp in readable and not self._serve_udp():
+                return
+            if self.tcp is not None and self.tcp in readable:
                 self._serve_tcp()
-                continue
-            except OSError:
-                break
-            try:
-                msg = json.loads(raw.decode())
-            except ValueError:
-                continue
-            if msg.get("magic") != "ue_py" or msg.get("source") == self.node_id:
-                continue
-            if msg.get("dest") and msg["dest"] != self.node_id:
-                continue
-            if msg["type"] == "ping":
-                self._send(
-                    "pong",
-                    msg["source"],
-                    {
-                        "user": "tester",
-                        "machine": "localhost",
-                        "engine_version": "5.8.4",
-                        "engine_root": "/UE",
-                        "project_root": "/P",
-                        "project_name": "FakeProject",
-                    },
-                )
-            elif msg["type"] == "open_connection":
-                self._open(msg)
-            elif msg["type"] == "close_connection":
-                self._close()
+
+    def _serve_udp(self):
+        try:
+            raw, _ = self.udp.recvfrom(65536)
+        except (BlockingIOError, InterruptedError):
+            return True
+        except OSError:
+            return False
+        try:
+            msg = json.loads(raw.decode())
+        except ValueError:
+            return True
+        if msg.get("magic") != "ue_py" or msg.get("source") == self.node_id:
+            return True
+        if msg.get("dest") and msg["dest"] != self.node_id:
+            return True
+        if msg["type"] == "ping":
+            self._send(
+                "pong",
+                msg["source"],
+                {
+                    "user": "tester",
+                    "machine": "localhost",
+                    "engine_version": "5.8.4",
+                    "engine_root": "/UE",
+                    "project_root": "/P",
+                    "project_name": "FakeProject",
+                },
+            )
+        elif msg["type"] == "open_connection":
+            self._open(msg)
+        elif msg["type"] == "close_connection":
+            self._close()
+        return True
 
     def _open(self, msg):
         self.opens += 1
@@ -109,7 +132,6 @@ class FakeUnrealNode(threading.Thread):
             self.tcp = socket.create_connection(endpoint[1:], timeout=2.0)
         except OSError:
             return
-        self.tcp.settimeout(0.1)
         self.endpoint = endpoint
         self.connections += 1
 
@@ -119,16 +141,12 @@ class FakeUnrealNode(threading.Thread):
         self.tcp = self.endpoint = None
 
     def _serve_tcp(self):
-        if self.tcp is None:
-            return
         try:
             raw = self.tcp.recv(65536)
-        except TimeoutError:
-            return
         except OSError:
-            self.tcp = self.endpoint = None
-            return
-        if not raw:
+            raw = b""
+        if not raw:  # the client closed the connection
+            self._close()
             return
         msg = json.loads(raw.decode())
         data = msg["data"]
@@ -149,10 +167,13 @@ class FakeUnrealNode(threading.Thread):
         }
         payload = json.dumps(reply, separators=(",", ":")).encode()
         time.sleep(self.delay)
-        # fragment the answer to exercise reassembly
-        self.tcp.sendall(payload[:10])
-        time.sleep(0.05)
-        self.tcp.sendall(payload[10:])
+        try:
+            # fragment the answer to exercise reassembly
+            self.tcp.sendall(payload[:10])
+            time.sleep(0.05)
+            self.tcp.sendall(payload[10:])
+        except OSError:
+            self._close()
 
 
 def loopback_multicast_available(timeout=0.5):
@@ -196,9 +217,7 @@ class RemoteProtocolTests(unittest.TestCase):
         time.sleep(0.2)
 
     def tearDown(self):
-        self.fake.stop.set()
-        self.fake.join(timeout=2.0)
-        self.fake.udp.close()
+        self.fake.close()
 
     def test_discover_connect_run_close(self):
         with self.remote.RemoteSession(GROUP, PORT, "0.0.0.0", "127.0.0.1") as session:
@@ -275,9 +294,7 @@ class UnrealOperatorTests(unittest.TestCase):
         self.rt.ue_nodes.clear()
         fake = getattr(self, "fake", None)
         if fake is not None:
-            fake.stop.set()
-            fake.join(timeout=2.0)
-            fake.udp.close()
+            fake.close()
 
     def start_fake_editor(self):
         if not loopback_multicast_available():

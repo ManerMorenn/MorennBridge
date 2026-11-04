@@ -198,9 +198,7 @@ def push_without_blocking():
             check(runtime.ue_status == "Done", f"push finishes on the main thread (status: {runtime.ue_status})")
             check(len(fake.commands) == 1, "Unreal received one import command")
     finally:
-        fake.stop.set()
-        fake.join(timeout=2.0)
-        fake.udp.close()
+        fake.close()
         prefs.multicast_port = port
         runtime.ue_nodes.clear()
 
