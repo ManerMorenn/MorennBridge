@@ -234,7 +234,7 @@ def rotation_angle(m3):
     return 2.0 * math.atan2(math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z), abs(q.w))
 
 
-def snap_rest_to_bind(context, arm_obj, bind_matrices, tolerance_deg=0.5):
+def snap_rest_to_bind(context, arm_obj, bind_matrices, actions=(), tolerance_deg=0.5):
     """Give bones the exact rest rotation of the file's bind matrices, when they are within ``tolerance_deg`` of it.
 
     Blender's FBX importer gives a bone whose children sit at its head (twist bones) a length of 0.01: head and tail
@@ -242,7 +242,8 @@ def snap_rest_to_bind(context, arm_obj, bind_matrices, tolerance_deg=0.5):
     on some twist bones of Epic's mannequin). Short bones are first lengthened along their direction (the length
     pass of the import sets the final lengths), then the parent-relative rotations of the file are applied top-down,
     so where the importer put the armature does not matter. A larger difference means the importer chose another rest
-    pose; that is left alone. Poses and the armature's action keep their result: each bone whose parent-relative rest
+    pose; that is left alone, as are bones with a connected child (its head follows the tail). Poses, the armature's
+    action and ``actions`` (the other takes of the file) keep their result: each bone whose parent-relative rest
     changed gets ``E @ basis``. Returns ``(bones changed, largest change in degrees)``.
     """
     tolerance = math.radians(tolerance_deg)
@@ -251,8 +252,9 @@ def snap_rest_to_bind(context, arm_obj, bind_matrices, tolerance_deg=0.5):
     context.view_layer.objects.active = arm_obj
     with context.temp_override(**_edit_override(context, arm_obj)):
         bpy.ops.object.mode_set(mode="EDIT")
+        connected = {eb.name for eb in arm_obj.data.edit_bones if any(c.use_connect for c in eb.children)}
         for eb in arm_obj.data.edit_bones:
-            if not any(child.use_connect for child in eb.children):  # a connected child's head follows the tail
+            if eb.name not in connected:  # a connected child's head follows the tail
                 eb.length = max(eb.length, 0.01 * (eb.head.length + 1.0))
         before = {eb.name: eb.matrix.copy() for eb in arm_obj.data.edit_bones}
         parents = {eb.name: eb.parent.name if eb.parent else None for eb in arm_obj.data.edit_bones}
@@ -261,7 +263,7 @@ def snap_rest_to_bind(context, arm_obj, bind_matrices, tolerance_deg=0.5):
             current = eb.matrix.to_3x3().normalized()
             rest[eb.name] = current
             parent = eb.parent
-            if parent is None or eb.name not in binds or parent.name not in binds:
+            if parent is None or eb.name in connected or eb.name not in binds or parent.name not in binds:
                 continue
             target = rest[parent.name] @ binds[parent.name].transposed() @ binds[eb.name]
             delta = rotation_angle(current.transposed() @ target)
@@ -274,7 +276,7 @@ def snap_rest_to_bind(context, arm_obj, bind_matrices, tolerance_deg=0.5):
         after = {eb.name: eb.matrix.copy() for eb in arm_obj.data.edit_bones}
         bpy.ops.object.mode_set(mode="OBJECT")
     if changed:
-        _keep_poses(arm_obj, _rest_changes(before, after, parents))
+        _keep_poses(arm_obj, _rest_changes(before, after, parents), actions)
     return changed, math.degrees(worst)
 
 
@@ -290,24 +292,24 @@ def _rest_changes(before, after, parents):
     return out
 
 
-def _keep_poses(arm_obj, corrections):
-    """``basis = E @ basis`` on the pose and on every key of the armature's action, so poses do not move."""
+def _keep_poses(arm_obj, corrections, actions=()):
+    """``basis = E @ basis`` on the pose and on every key of ``actions`` and of the armature's action, so poses do
+    not move."""
     if arm_obj.pose is not None:
         for name, e in corrections.items():
             pb = arm_obj.pose.bones.get(name)
             if pb is not None:
                 pb.matrix_basis = e @ pb.matrix_basis
     ad = arm_obj.animation_data
-    action = ad.action if ad is not None else None
-    if action is None:
-        return
-    groups, bags = _group_bone_fcurves(action)
-    channels = {}
-    for (slot_key, bone, prop), fcs in groups.items():
-        if bone in corrections:
-            channels.setdefault((slot_key, bone), {})[prop] = fcs
-    for (slot_key, bone), props in channels.items():
-        _premultiply_keys(bags[slot_key], bone, props, corrections[bone], arm_obj.pose.bones.get(bone))
+    todo = list(dict.fromkeys([*actions, *([ad.action] if ad is not None and ad.action is not None else [])]))
+    for action in todo:
+        groups, bags = _group_bone_fcurves(action)
+        channels = {}
+        for (slot_key, bone, prop), fcs in groups.items():
+            if bone in corrections:
+                channels.setdefault((slot_key, bone), {})[prop] = fcs
+        for (slot_key, bone), props in channels.items():
+            _premultiply_keys(bags[slot_key], bone, props, corrections[bone], arm_obj.pose.bones.get(bone))
 
 
 def _premultiply_keys(slot_bag, bone, props, e, pose_bone):

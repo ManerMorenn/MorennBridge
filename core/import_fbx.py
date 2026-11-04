@@ -270,7 +270,7 @@ def _decide_axes(arm, info, prefs, report):
 def _post_process_armature(context, arm, result, prefs, report, convert_axes, reset_pose, stem):
     info = result.info
     if info.bind_matrices:
-        changed, worst = bones.snap_rest_to_bind(context, arm, info.bind_matrices)
+        changed, worst = bones.snap_rest_to_bind(context, arm, info.bind_matrices, result.actions)
         if changed and worst >= 0.001:
             report.info(
                 f"'{arm.name}': {changed} bone(s) set to the file's exact rest rotation "

@@ -140,6 +140,12 @@ class ImportUETests(unittest.TestCase):
         bones = fixtures.addon_module("core.bones")
         rig, _body = _animated_character()
         scene = bpy.context.scene
+        with bpy.context.temp_override(**fixtures.addon_module("compat").window_override()):
+            bpy.context.view_layer.objects.active = rig
+            bpy.ops.object.mode_set(mode="EDIT")
+            for eb in rig.data.edit_bones:  # like Blender's FBX importer, which connects no bone
+                eb.use_connect = False
+            bpy.ops.object.mode_set(mode="OBJECT")
 
         def posed(frame):
             scene.frame_set(frame)
@@ -147,6 +153,8 @@ class ImportUETests(unittest.TestCase):
             return {pb.name: pb.matrix.copy() for pb in rig.pose.bones}
 
         before = {frame: posed(frame) for frame in (1, 12, 24)}
+        take = rig.animation_data.action
+        other_take = take.copy()  # a second take of the same file, not assigned
         binds = {}
         for bone in rig.data.bones:
             m = rig.matrix_world @ bone.matrix_local
@@ -154,18 +162,47 @@ class ImportUETests(unittest.TestCase):
             m = m @ Matrix.Rotation(math.radians(turn), 4, "Y")
             binds[bone.name] = tuple(m[r][c] for c in range(4) for r in range(4))
         with bpy.context.temp_override(**fixtures.addon_module("compat").window_override()):
-            changed, worst = bones.snap_rest_to_bind(bpy.context, rig, binds)
+            changed, worst = bones.snap_rest_to_bind(bpy.context, rig, binds, [take, other_take])
         self.assertEqual(changed, 1)
         self.assertAlmostEqual(worst, 0.2, places=3)
         want = (rig.matrix_world @ bones._fbx_matrix(binds["bone_01"])).to_3x3().normalized()
         got = rig.data.bones["bone_01"].matrix_local.to_3x3().normalized()
         self.assertLess(math.degrees(bones.rotation_angle(want.transposed() @ got)), 1e-3)
-        for frame, matrices in before.items():
-            after = posed(frame)
-            for name, m in matrices.items():
-                for i in range(4):
-                    for j in range(4):
-                        self.assertAlmostEqual(after[name][i][j], m[i][j], places=3, msg=f"{name} @ {frame}")
+        for action in (take, other_take):
+            rig.animation_data.action = action
+            for frame, matrices in before.items():
+                after = posed(frame)
+                for name, m in matrices.items():
+                    for i in range(4):
+                        for j in range(4):
+                            msg = f"{action.name}: {name} @ {frame}"
+                            self.assertAlmostEqual(after[name][i][j], m[i][j], places=3, msg=msg)
+
+    def test_rest_snap_leaves_bones_with_a_connected_child(self):
+        """Turning a bone would move its connected child's head, which follows the tail."""
+        bones = fixtures.addon_module("core.bones")
+        rig, _body = _rigged_character("Hero", shape_key=False)
+        with bpy.context.temp_override(**fixtures.addon_module("compat").window_override()):
+            bpy.context.view_layer.objects.active = rig
+            bpy.ops.object.mode_set(mode="EDIT")
+            child = rig.data.edit_bones["bone_02"]
+            child.head = child.parent.tail
+            child.use_connect = True
+            bpy.ops.object.mode_set(mode="OBJECT")
+        rest = {b.name: b.matrix_local.copy() for b in rig.data.bones}
+        binds = {}
+        for bone in rig.data.bones:
+            turn = {"bone_01": 0.2, "bone_02": 0.3}.get(bone.name, 0.0)
+            m = rig.matrix_world @ bone.matrix_local @ Matrix.Rotation(math.radians(turn), 4, "X")
+            binds[bone.name] = tuple(m[r][c] for c in range(4) for r in range(4))
+        with bpy.context.temp_override(**fixtures.addon_module("compat").window_override()):
+            changed, _worst = bones.snap_rest_to_bind(bpy.context, rig, binds)
+        self.assertEqual(changed, 1)  # bone_02 only: bone_01 holds the connected bone_02
+        after = rig.data.bones["bone_01"].matrix_local
+        self.assertLess(
+            math.degrees(bones.rotation_angle(rest["bone_01"].to_3x3().transposed() @ after.to_3x3())), 1e-4
+        )
+        self.assertLess((rig.data.bones["bone_02"].head_local - rest["bone_02"].translation).length, 1e-4)
 
     def test_skeletal_lods_from_unreal_become_lod_objects(self):
         """Unreal writes a skeletal mesh's LODs as skinned meshes under one LOD group, last LOD first in the scene."""
