@@ -38,7 +38,7 @@ write anything, and (optionally) push assets straight into a running editor.
   bones the way Unreal would, bind bone-parented props, assign a default material, …).
 - **Unreal Link**: discover a running Unreal Editor, push the last export (an Interchange or legacy import driven by
   a manifest), pull selected assets back. Needs the Python remote execution setting in your project; see
-  [Unreal setup](docs/UE_SETUP.md). Experimental: not yet verified against a live editor.
+  [Unreal setup](docs/UE_SETUP.md). Verified with Unreal Engine 5.8.4.
 
 ## Install
 
@@ -82,9 +82,9 @@ The documentation is also published at <https://morennbridge.manermorenn.com>.
 
 - Blender 4.5 or newer, tested on 4.5 LTS, 5.0, 5.1 and 5.2 LTS. Uses Blender's FBX exporter and importer plus a
   binary post-pass.
-- Unreal Engine 5 (targets 5.8; Interchange import by default, legacy importer supported).
-- The Blender side is covered by the test suite. The Unreal-side scripts were written against the 5.8 source and
-  still need confirmation in a live editor; see the [support page](docs/SUPPORT.md).
+- Unreal Engine 5.8, verified with 5.8.4 (Interchange import by default, legacy importer supported).
+- The Blender side is covered by the test suite, the Unreal side by a smoke test in the editor; see the
+  [support page](docs/SUPPORT.md).
 
 ## Development
 

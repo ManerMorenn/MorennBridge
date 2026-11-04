@@ -1,7 +1,7 @@
 # Tutorials
 
-Three short walkthroughs. The Blender side of each is covered by the test suite. The Unreal steps follow the engine
-source and have not all been confirmed in a live editor yet, see [Support](SUPPORT.md).
+Three short walkthroughs. The Blender side of each is covered by the test suite, and the Unreal side by imports into
+Unreal Engine 5.8.4, see [Support](SUPPORT.md).
 
 ## Static prop with collision and a socket
 

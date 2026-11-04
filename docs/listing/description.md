@@ -29,7 +29,7 @@ right conventions once and turns them into buttons.
 - **Import from Unreal:** the root bone comes back, every bone points to its child, and exporting again reproduces the
   original skeleton.
 - **Pre-flight validation:** errors and warnings with one-click fixes, before anything is written.
-- **Unreal Link (experimental):** push exports to a running editor over Unreal's Python remote execution.
+- **Unreal Link:** push exports to a running editor over Unreal's Python remote execution.
 
 Your scene is never touched by an export: everything happens on temporary copies.
 

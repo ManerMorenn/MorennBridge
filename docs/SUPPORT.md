@@ -9,13 +9,15 @@
 | Blender 5.2 LTS | Supported |
 | Blender 4.4 and older | Not supported: the FBX importer and smoothing options the add-on relies on do not exist there |
 | Linux, Windows, macOS | Tested in CI |
-| Unreal Engine 5.8 | Target version, written against the engine source. Not yet confirmed in a live editor |
+| Unreal Engine 5.8 | Supported, verified with 5.8.4 on Windows (Interchange and legacy FBX importers) |
 | Other Unreal versions | Not supported |
 
 The test suite runs on every supported Blender version, and on Blender's daily builds twice a week.
 
-Unreal Link, the push and pull feature, is experimental for the same reason: it has only been tested against a fake
-editor that speaks the same protocol.
+Unreal 5.8.4 was checked in the editor: imports of every kind of export (static meshes with collision, sockets and
+LODs, skeletal meshes with LODs and morph targets, animations at 24 and 30 fps, vertex colours), Unreal Link push and
+pull, and round trips of Unreal's mannequins, a MetaHuman, a Mixamo character and a character from Fab. The exported
+files also open without errors in the Autodesk FBX SDK. Files made in Maya or 3ds Max have not been tested.
 
 ## Known limitations
 

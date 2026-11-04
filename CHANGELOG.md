@@ -12,6 +12,5 @@ First public version. Requires Blender 4.5 or newer.
 - Import of Unreal FBX exports, binary or ASCII: root bone restored, per-bone axis conversion, bone lengths,
   hierarchy clean-up. Morph target names longer than Blender allows come back in full on export.
 - Pre-flight validation with automatic fixes, documented issue codes and an Export Anyway button.
-- Unreal Link: Python remote execution client and editor-side import/export scripts (experimental, not yet verified
-  against a live editor). Unreal-only animation settings (root motion, retarget source…) and material slots
-  survive a pull and push.
+- Unreal Link: Python remote execution client and editor-side import/export scripts, verified with Unreal Engine
+  5.8.4. Unreal-only animation settings (root motion, retarget source…) and material slots survive a pull and push.

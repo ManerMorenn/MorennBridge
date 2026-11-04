@@ -170,8 +170,8 @@ so Pull records each slot and its material, and a push restores both, also when 
 push was skipped. Blender stays usable while Unreal imports: the panel shows the status, and the Log gets the
 result when Unreal answers. Push and Pull are greyed out until then.
 
-This part has not been run against a live editor yet. Property names on the Unreal side that do not exist in a
-given engine version are skipped and logged.
+Push and Pull were verified with Unreal Engine 5.8.4. Property names on the Unreal side that do not exist in a given
+engine version are skipped and logged.
 
 ## 7. Preferences
 
