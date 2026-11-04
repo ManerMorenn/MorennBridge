@@ -24,7 +24,8 @@ files also open without errors in the Autodesk FBX SDK. Files made in Maya or 3d
 - Collection instances export their meshes only. Curves and other objects inside the collection are ignored (`W025`).
 - Hair curves, point clouds, volumes and Grease Pencil objects cannot be exported as meshes. They are listed in the
   Log.
-- Shape key animation is not exported. Shape keys themselves are.
+- Shape key animation is not exported. Shape keys themselves are, muted ones included, with their vertex group
+  applied to the shape.
 - Blender keeps 63 bytes of a name. Shape keys imported with longer names are shortened in Blender, and the export
   writes their full names again. A shape key you rename gets the new name.
 - Importing an animation creates a new rig. It cannot be applied to an existing one yet.

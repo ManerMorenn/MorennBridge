@@ -328,6 +328,29 @@ class ExportTimeCodeTests(unittest.TestCase):
             self.assertAlmostEqual(float(a), float(b), places=5)
         self.assertTrue(fixtures.no_temp_leftovers()[0])
 
+    def test_shape_key_vertex_group_and_mute(self):
+        """A key's vertex group scales the exported shape; muted keys export their shape, like Blender's exporter."""
+        staging = fixtures.addon_module("core.staging")
+        cube = fixtures.make_cube("Face", size=2.0)
+        group = cube.vertex_groups.new(name="Quarter")
+        group.add(range(len(cube.data.vertices)), 0.25, "REPLACE")
+        cube.shape_key_add(name="Basis")
+        for name in ("Weighted", "Muted", "MutedWeighted"):
+            kb = cube.shape_key_add(name=name)
+            for point in kb.data:
+                point.co.z += 0.5
+        blocks = cube.data.shape_keys.key_blocks
+        blocks["Weighted"].vertex_group = blocks["MutedWeighted"].vertex_group = "Quarter"
+        blocks["Muted"].mute = blocks["MutedWeighted"].mute = True
+        base_z = [v.co.z for v in cube.data.vertices]
+        with staging.Staging(bpy.context, fixtures.addon_module("core.log").Report()) as st:
+            _mesh, specs = st.evaluate_source_mesh(cube)
+        offsets = {s["name"]: {round(float(z) - b, 4) for z, b in zip(s["co"][2::3], base_z)} for s in specs[1:]}
+        self.assertEqual(offsets, {"Weighted": {0.125}, "Muted": {0.5}, "MutedWeighted": {0.125}})
+        self.assertEqual([s["mute"] for s in specs[1:]], [False, True, True])
+        self.assertTrue(blocks["Muted"].mute and blocks["MutedWeighted"].mute)
+        self.assertTrue(fixtures.no_temp_leftovers()[0])
+
     def test_e020_combined_file_with_the_legacy_importer(self):
         cubes = [fixtures.make_cube("A"), fixtures.make_cube("B")]
         done, _manifest, report = fixtures.run_export(cubes, self.tmp, file_mode="COMBINED", ue_importer="LEGACY")

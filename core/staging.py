@@ -271,14 +271,18 @@ class Staging:
             coords = []
             for i, kb in enumerate(keys.key_blocks[1:], start=1):
                 buf = np.empty(n * 3, dtype=np.float32)
-                if not shaping and len(kb.data) == n:  # nothing else moves vertices: the key holds the result
+                if not shaping and not kb.vertex_group and len(kb.data) == n:  # the key holds the result
                     kb.data.foreach_get("co", buf)
-                else:  # one evaluation per key (slow with many keys, e.g. a MetaHuman face)
+                else:  # one evaluation per key, which applies its vertex group (slow with many keys)
                     target.active_shape_key_index = i
-                    dg.update()
-                    m = bpy.data.meshes.new_from_object(
-                        target.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg
-                    )
+                    muted, kb.mute = kb.mute, False  # a pinned muted key gives the basis; keep its shape
+                    try:
+                        dg.update()
+                        m = bpy.data.meshes.new_from_object(
+                            target.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg
+                        )
+                    finally:
+                        kb.mute = muted
                     if len(m.vertices) != n:
                         bpy.data.meshes.remove(m)
                         raise StagingError(
