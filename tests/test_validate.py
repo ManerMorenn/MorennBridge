@@ -336,7 +336,7 @@ class ExportTimeCodeTests(unittest.TestCase):
         group.add(range(len(cube.data.vertices)), 0.25, "REPLACE")
         cube.shape_key_add(name="Basis")
         for name in ("Weighted", "Muted", "MutedWeighted"):
-            kb = cube.shape_key_add(name=name)
+            kb = cube.shape_key_add(name=name, from_mix=False)  # Blender 5 gives a new key the value 1.0
             for point in kb.data:
                 point.co.z += 0.5
         blocks = cube.data.shape_keys.key_blocks
