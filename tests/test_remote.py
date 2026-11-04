@@ -436,6 +436,39 @@ class UnrealOperatorTests(unittest.TestCase):
         self.assertEqual(list(recorded), [m.name for m in crate.data.materials])
         self.assertIn("Unreal material slots kept on SM_Crate", fixtures.log_text())
 
+    def test_slots_sharing_one_material_asset_keep_their_names(self):
+        """Unreal writes one FBX material per slot: the asset's name in its first slot, ``<asset>_<slot index>`` in
+        the others."""
+        crate = fixtures.make_cube("SM_Crate")
+        crate.data.materials.clear()
+        first, other, second = (bpy.data.materials.new(name) for name in ("M_Test", "M_Other", "M_Test_2"))
+        for material in (first, other, second):
+            crate.data.materials.append(material)
+        for i, polygon in enumerate(crate.data.polygons):
+            polygon.material_index = i % 3
+        slots = [
+            {"slot": "Body", "material": "/Game/M_Test"},
+            {"slot": "Lid", "material": "/Game/M_Other"},
+            {"slot": "Trim", "material": "/Game/M_Test"},
+        ]
+        report = fixtures.addon_module("core.log").Report("test")
+        fixtures.addon_module("ops.ue_ops").remember_unreal_materials([crate], slots, report)
+        recorded = json.loads(crate.morenn.ue_materials)
+        self.assertEqual(
+            recorded,
+            {
+                first.name: ["Body", "/Game/M_Test"],
+                second.name: ["Trim", "/Game/M_Test"],
+                other.name: ["Lid", "/Game/M_Other"],
+            },
+        )
+        done, manifest_path, report = fixtures.run_export([crate], self.tmp)
+        self.assertTrue(report.ok, fixtures.report_text(report))
+        self.assertEqual(fixtures.fbx_materials(fixtures.fbx_load(done[0].path)[0]), {"Body", "Lid", "Trim"})
+        with open(manifest_path, encoding="utf-8") as fh:
+            sent = json.load(fh)["items"][0]["assets"][0]["ue_materials"]
+        self.assertEqual(sent, {"Body": "/Game/M_Test", "Trim": "/Game/M_Test", "Lid": "/Game/M_Other"})
+
     def test_push_lists_the_animation_settings_set_again(self):
         self.start_fake_editor()
         manifest = self.export_cube()

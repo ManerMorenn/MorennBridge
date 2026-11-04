@@ -399,6 +399,7 @@ def mesh_state(mesh):
     slots = mesh.get_editor_property("materials" if isinstance(mesh, unreal.SkeletalMesh) else "static_materials")
     state = {
         "triangles per LOD": lod_triangles(mesh),
+        "slots": [str(s.get_editor_property("material_slot_name")) for s in slots],
         "materials": [short(s.get_editor_property("material_interface").get_path_name()) for s in slots],
     }
     if isinstance(mesh, unreal.SkeletalMesh):
@@ -482,13 +483,24 @@ def check(cases_path, results_path):
     unreal.log(f"[smoke] results written to {results_path}")
 
 
-def export_mannequin(out_dir):
+def shared_material_mesh(root):
+    """A copy of SKM_Manny_Simple whose slots all use the first slot's material."""
+    path = f"{root}_source/SKM_Manny_Shared"
+    mesh = unreal.load_asset(path) if LIB.does_asset_exist(path) else LIB.duplicate_asset(MANNEQUIN[0], path)
+    slots = common.material_slots(mesh)
+    common.set_material_slots(mesh, {s["slot"]: slots[0]["material"] for s in slots})
+    LIB.save_asset(path)
+    unreal.log(f"[smoke] {path}: {common.material_slots(mesh)}")
+    return path
+
+
+def export_mannequin(out_dir, root):
     extra = [FULL_MANNY] if LIB.does_asset_exist(FULL_MANNY) else []  # not in UE 5.8's template
-    report = mb_export.run(out_dir, list(MANNEQUIN) + extra)
+    report = mb_export.run(out_dir, list(MANNEQUIN) + extra + [shared_material_mesh(root)])
     unreal.log(f"[smoke] mannequin export: {'ok' if report['ok'] else 'FAILED'}")
 
 
 if os.environ.get("MB_SMOKE_STAGE") == "export":
-    export_mannequin(os.environ["MB_SMOKE_UE_EXPORT"])
+    export_mannequin(os.environ["MB_SMOKE_UE_EXPORT"], os.environ["MB_SMOKE_CONTENT_ROOT"])
 else:
     check(os.environ["MB_SMOKE_CASES"], os.environ["MB_SMOKE_RESULTS"])

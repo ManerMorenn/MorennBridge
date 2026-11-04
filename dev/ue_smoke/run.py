@@ -107,7 +107,8 @@ def main():
     ue_export = ""
     if args.roundtrip:
         ue_export = os.path.join(args.out, "from_unreal")
-        if run_unreal(args, "export", {"MB_SMOKE_UE_EXPORT": ue_export}, "unreal_export.log"):
+        env = {"MB_SMOKE_UE_EXPORT": ue_export, "MB_SMOKE_CONTENT_ROOT": args.content_root}
+        if run_unreal(args, "export", env, "unreal_export.log"):
             return 1
     if run_blender(
         args, "blender_cases.py", args.content_root, ue_export, os.path.abspath(args.real) if args.real else ""

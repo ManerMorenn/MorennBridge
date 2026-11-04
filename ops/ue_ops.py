@@ -269,11 +269,15 @@ class MORENN_OT_ue_push(RemoteJobOperator, bpy.types.Operator):
 
 def remember_unreal_materials(objects, slots, report):
     """Map the Blender materials of a pulled mesh to its Unreal slots: Unreal's FBX names the materials after the
-    material assets, so the slot names would otherwise be lost."""
+    material assets, so the slot names would otherwise be lost. A material used by several slots is named after the
+    asset in its first slot and ``<asset>_<slot index>`` in the others (FFbxExporter::ExportMaterial)."""
     by_material = {}
-    for slot in slots or []:
+    for index, slot in enumerate(slots or []):
         if slot.get("material"):
-            by_material.setdefault(slot["material"].rsplit("/", 1)[-1], [slot["slot"], slot["material"]])
+            asset = slot["material"].rsplit("/", 1)[-1]
+            name = f"{asset}_{index}" if asset in by_material else asset
+            by_material.setdefault(asset, [slot["slot"], slot["material"]])
+            by_material.setdefault(name, [slot["slot"], slot["material"]])
     mapped = []
     for obj in objects:
         if obj.type != "MESH":

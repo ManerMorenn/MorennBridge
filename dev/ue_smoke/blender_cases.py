@@ -451,6 +451,18 @@ def case_mannequin(smoke, ue_export):
         manifest = smoke.export(name, "mesh", [rig], **prefs)
         expect = {"reimport": {"SKM_Manny_Simple": {"source": original}}}
         smoke.add(name, "re-import loop", [manifest], dict(expect, folder_assets={"SKM_Manny_Simple": "SkeletalMesh"}))
+    # two slots sharing one material asset: Unreal names the second FBX material <asset>_<slot index>
+    shared = pulled["SKM_Manny_Shared"]
+    fixtures.fresh_scene(cm=True)
+    rig = import_unreal_file(shared).armatures[0]
+    manifest = smoke.export("reimport_shared_material", "mesh", [rig])
+    expect = {"reimport": {"SKM_Manny_Shared": {"source": shared["asset_path"]}}}
+    smoke.add(
+        "reimport_shared_material",
+        "re-import loop",
+        [manifest],
+        dict(expect, folder_assets={"SKM_Manny_Shared": "SkeletalMesh"}),
+    )
     anims = {}
     manifests = [on_skeleton]
     for stem in ("MM_Idle", "MF_Unarmed_Jog_Fwd"):
