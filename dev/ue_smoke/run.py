@@ -2,12 +2,15 @@
 """Headless smoke test of MorennBridge against a real Unreal Editor project.
 
     python dev/ue_smoke/run.py --blender <blender> --editor <UnrealEditor-Cmd> --project <.uproject>
-                               [--out <dir>] [--content-root /Game/MorennBridgeSmoke] [--roundtrip]
+                               [--out <dir>] [--content-root /Game/MorennBridgeSmoke] [--roundtrip] [--real <dir>]
     python dev/ue_smoke/run.py --blender <blender> --project <.uproject> --remote
 
 1. With --roundtrip, Unreal exports the template's mannequin and two of its animations (mb_ue_export.py).
 2. Blender builds the cases and exports them with MorennBridge, one folder per case with its .blend.
 3. Unreal imports every case with mb_ue_import.py into <content-root>/<case>, then checks the assets.
+
+With --real, every FBX file of <dir> (characters made elsewhere: Mixamo, MetaHuman, an asset pack) goes through
+Blender too, and Unreal's own import of the original, with the same settings, is the reference it is compared with.
 
 With --remote, Blender talks to the project's running editor instead (remote execution on): discovery, a statement,
 push, pull and push back through the add-on's operators, into <content-root>/remote.
@@ -88,6 +91,9 @@ def main():
     parser.add_argument("--content-root", default="/Game/MorennBridgeSmoke")
     parser.add_argument("--roundtrip", action="store_true", help="also round-trip the template mannequin")
     parser.add_argument("--remote", action="store_true", help="check Unreal Link against the running editor")
+    parser.add_argument(
+        "--real", default="", help="folder of FBX files made elsewhere to round-trip (never commit them)"
+    )
     args = parser.parse_args()
     args.out = os.path.abspath(args.out)
     os.makedirs(args.out, exist_ok=True)
@@ -103,7 +109,9 @@ def main():
         ue_export = os.path.join(args.out, "from_unreal")
         if run_unreal(args, "export", {"MB_SMOKE_UE_EXPORT": ue_export}, "unreal_export.log"):
             return 1
-    if run_blender(args, "blender_cases.py", args.content_root, *([ue_export] if ue_export else [])):
+    if run_blender(
+        args, "blender_cases.py", args.content_root, ue_export, os.path.abspath(args.real) if args.real else ""
+    ):
         return 1
     results = os.path.join(args.out, "results.json")
     if os.path.exists(results):

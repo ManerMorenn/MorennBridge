@@ -43,7 +43,8 @@ checks names, LODs, collision, sockets, shading, skeletons, animations and verte
 `--roundtrip` also sends the Third Person template's mannequin through Blender and back. Use a project made for
 testing: the run replaces `/Game/MorennBridgeSmoke`. With the project open in the editor and remote execution on,
 `--remote` (no `--editor`) checks Unreal Link instead: discovery, push, pull and push back, through paths with
-spaces and accents.
+spaces and accents. `--real <dir>` round-trips every FBX file of a folder (characters made elsewhere) and compares
+the result with Unreal's own import of the original; keep such files outside the repository.
 
 ## Versions
 

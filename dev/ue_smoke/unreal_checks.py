@@ -322,6 +322,45 @@ def compare_skeletal(case, name, exp):
     case.check(slots == ref_slots, f"{name}: material slots and materials", f"{slots}, original {ref_slots}")
 
 
+def compare_real(case, name, exp):
+    """The round trip of a file made elsewhere against Unreal's own import of the same file."""
+    mesh, reference = case.load(name), unreal.load_asset(exp["reference"])
+    for asset, label in ((mesh, "round trip"), (reference, "Unreal's import of the file")):
+        if not case.check(isinstance(asset, unreal.SkeletalMesh), f"{name}: {label}", type(asset).__name__):
+            return
+    pose = POSE.get_reference_pose(mesh.get_editor_property("skeleton"))
+    ref_pose = POSE.get_reference_pose(reference.get_editor_property("skeleton"))
+    bones = [str(n) for n in POSE.get_bone_names(pose)]
+    ref_bones = [str(n) for n in POSE.get_bone_names(ref_pose)]
+    extra = sorted(set(bones) - set(ref_bones))
+    case.check(not extra, f"{name}: no bone Unreal's import lacks", extra[:8])
+    left_out = sorted(set(ref_bones) - set(bones))
+    case.note(f"{name}: bones left out (no weights)", f"{len(left_out)} {left_out[:6]}" if left_out else "none")
+    shared = [b for b in bones if b in ref_bones]
+    parents = [b for b in shared if str(mesh.get_bone_parent(b)) != str(reference.get_bone_parent(b))]
+    case.check(not parents, f"{name}: same parents", parents[:5])
+    distance, at, angle, at_angle = pose_difference(pose, ref_pose, shared, use_reference_pose=True)
+    case.check(distance < 0.01, f"{name}: rest positions", f"largest difference {distance:.5f} cm ({at})")
+    case.check(angle < 0.01, f"{name}: rest rotations", f"largest difference {angle:.5f} deg ({at_angle})")
+    triangles, ref_triangles = lod_triangles(mesh), lod_triangles(reference)
+    case.check(
+        triangles == ref_triangles, f"{name}: triangles per LOD", f"{triangles}, Unreal's import {ref_triangles}"
+    )
+    bounds, ref_bounds = mesh.get_imported_bounds(), reference.get_imported_bounds()
+    got, wanted = vec(bounds.origin) + vec(bounds.box_extent), vec(ref_bounds.origin) + vec(ref_bounds.box_extent)
+    case.check(close(got, wanted, 0.1), f"{name}: bounds", f"{got}, Unreal's import {wanted}")
+    slots = [s["slot"] for s in common.material_slots(mesh)]
+    ref_slots = [s["slot"] for s in common.material_slots(reference)]
+    case.check(slots == ref_slots, f"{name}: material slots", f"{slots}, Unreal's import {ref_slots}")
+    morphs, ref_morphs = set(mesh.get_all_morph_target_names()), set(reference.get_all_morph_target_names())
+    lost = sorted(str(n) for n in ref_morphs - morphs)
+    case.check(not lost, f"{name}: morph targets", f"{len(morphs)}, Unreal's import {len(ref_morphs)}, lost {lost[:5]}")
+    # Unreal drops a morph target whose vertices all move less than MorphThresholdPosition (0.015 cm) unless the
+    # normals it computes change enough, so the two imports can differ on such near-empty morph targets
+    extra = sorted(str(n) for n in morphs - ref_morphs)
+    case.note(f"{name}: morph targets Unreal's import drops", f"{len(extra)} {extra[:4]}" if extra else "none")
+
+
 def compare_animation(case, name, exp):
     anim, reference = case.load(name), unreal.load_asset(exp["reference"])
     if not case.check(isinstance(anim, unreal.AnimSequence), f"{name} is an animation", type(anim).__name__):
@@ -413,6 +452,8 @@ def run_case(data, root):
         compare_animation(case, name, e)
     for name, e in exp.get("reimport", {}).items():
         check_reimport(case, name, e, before[name])
+    for name, e in exp.get("compare_real", {}).items():
+        compare_real(case, name, e)
     classes = asset_classes(folder)
     for name in exp.get("absent", []):
         case.check(classes.get(name) in (None, "ObjectRedirector"), f"no asset left as {name}", classes.get(name))

@@ -8,6 +8,7 @@ and what Unreal should end up with, in Unreal's axes and centimetres. With <ue_e
 Unreal by unreal_checks.py), the mannequin round-trip case is added.
 """
 
+import functools
 import importlib
 import json
 import math
@@ -478,6 +479,31 @@ def case_mannequin(smoke, ue_export):
         )
 
 
+def case_real_file(smoke, path):
+    """A file made elsewhere: Unreal's own import of it, with the push settings, is the reference for the round trip
+    through Blender."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    case = "real_" + fixtures.addon_module("core.naming").sanitize_asset_name(stem)
+    scene = fixtures.fresh_scene(cm=True)
+    rig = import_unreal_file({"file": path}).armatures[0]
+    validate = fixtures.addon_module("core.validate")
+    groups = fixtures.addon_module("core.classify").build_groups([rig], smoke.prefs, scene)
+    for issue in validate.run(bpy.context, groups, smoke.prefs):  # what Fix All would do in the panel
+        if issue.severity == "ERROR" and issue.fix_id:
+            validate.apply_fix(bpy.context, issue)
+    manifest = smoke.export(case, "roundtrip", [rig])
+    with open(manifest, encoding="utf-8") as fh:
+        data = json.load(fh)
+    item = data["items"][0]
+    asset = item["assets"][0]["name"]
+    folder = f"{smoke.root}/{case}/original"
+    data["items"] = [dict(item, file=os.path.basename(path), path=path, destination_path=folder, skeleton=None)]
+    original = os.path.join(smoke.out, case, "original.morenn.json")
+    with open(original, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=1)
+    smoke.add(case, "real file", [original, manifest], {"compare_real": {asset: {"reference": f"{folder}/{asset}"}}})
+
+
 CASES = (
     case_combined,
     case_single_file_collision,
@@ -499,8 +525,11 @@ def main():
     smoke = Smoke(out_dir, content_root)
     failed = []
     cases = list(CASES)
-    if len(argv) > 2:
+    if len(argv) > 2 and argv[2]:
         cases.append(lambda smoke: case_mannequin(smoke, argv[2]))
+    real = argv[3] if len(argv) > 3 else ""
+    paths = [os.path.join(real, n) for n in sorted(os.listdir(real)) if n.lower().endswith(".fbx")] if real else []
+    cases.extend(functools.partial(case_real_file, path=path) for path in paths)
     for build in cases:
         try:
             build(smoke)
