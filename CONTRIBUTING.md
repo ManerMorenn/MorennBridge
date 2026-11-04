@@ -46,6 +46,10 @@ testing: the run replaces `/Game/MorennBridgeSmoke`. With the project open in th
 spaces and accents. `--real <dir>` round-trips every FBX file of a folder (characters made elsewhere) and compares
 the result with Unreal's own import of the original; keep such files outside the repository.
 
+`python dev/check_fbx_sdk.py <file or folder> [...]` opens FBX files with the Autodesk FBX SDK and flags files it
+cannot import, LOD levels without a mesh, clusters without a bone and skinned meshes without a bind pose. The SDK has
+its own licence and is not part of this repository: install its Python wheel (Python 3.11 for 2020.3.11) yourself.
+
 ## Versions
 
 The version follows [semantic versioning](https://semver.org) and lives in `__init__.py` and `blender_manifest.toml`,
