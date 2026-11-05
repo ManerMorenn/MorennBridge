@@ -9,7 +9,7 @@ First public version. Requires Blender 4.5 or newer.
 - Static mesh, skeletal mesh and animation export with Unreal's axis convention, centimetres, smoothing groups,
   tangents, collision/socket/LOD naming, skeletal mesh LODs, generated collision meshes and a JSON manifest.
 - Shape keys export with their vertex groups applied. Muted shape keys are exported too, as Blender's own exporter
-  does.
+  does; shape keys that move nothing are left out of skeletal mesh files.
 - Skin clusters are written only for the bones that weight a mesh, so Unreal imports skeletal meshes with many bones
   and LODs much faster.
 - Curves, surfaces, text, metaballs, Geometry Nodes instances and collection instances export as meshes.

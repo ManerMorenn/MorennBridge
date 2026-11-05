@@ -250,6 +250,28 @@ class SkeletalExportTests(unittest.TestCase):
         self.assertEqual(self.I.definition_count(root, b"Deformer"), len(self.I.find_objects(root, b"Deformer")))
         self.assertIn("1 skin cluster(s) that weight no vertex left out", fixtures.report_text(report))
 
+    def test_shape_keys_that_move_nothing_are_left_out(self):
+        rig, body = _rigged_character()
+        body.shape_key_add(name="Still", from_mix=False)
+        done, _, report = fixtures.run_export([rig], self.tmp)
+        self.assertTrue(report.ok, [str(e) for e in report.entries])
+        root, _ = fixtures.fbx_load(done[0].path)
+        self.assertEqual(self.patches.blend_shape_names(root), {"SKM_Hero": ["Puff"]})
+        for kind in (b"Geometry", b"Deformer"):
+            self.assertEqual(self.I.definition_count(root, kind), len(self.I.find_objects(root, kind)))
+        self.assertIn("1 shape key(s) that move no vertex left out", fixtures.report_text(report))
+
+    def test_mesh_whose_shape_keys_all_move_nothing_has_no_blend_shape(self):
+        rig, body = _rigged_character(shape_key=False)
+        body.shape_key_add(name="Basis", from_mix=False)
+        body.shape_key_add(name="Still", from_mix=False)
+        done, _, report = fixtures.run_export([rig], self.tmp)
+        self.assertTrue(report.ok, [str(e) for e in report.entries])
+        root, _ = fixtures.fbx_load(done[0].path)
+        self.assertFalse(self.I.find_objects(root, b"Deformer", subclass=b"BlendShape"))
+        self.assertFalse(self.I.find_objects(root, b"Geometry", subclass=b"Shape"))
+        self.assertTrue(self.I.find_objects(root, b"Deformer", subclass=b"Skin"))
+
     def test_multiple_roots_rejected(self):
         rig, body = _rigged_character(shape_key=False)
         compat = fixtures.addon_module("compat")

@@ -114,6 +114,14 @@ class FbxPatchTests(unittest.TestCase):
                 self.assertEqual(layer.find(b"MappingInformationType").props[0], b"ByPolygonVertex")
                 self.assertNotIn("normals stored per vertex", fixtures.report_text(report))
 
+    def test_static_files_keep_shape_keys_that_move_nothing(self):
+        ball = self._ball()
+        ball.shape_key_add(name="Still", from_mix=False)
+        done, _, report = fixtures.run_export([ball], self.tmp)
+        self.assertTrue(report.ok, [str(e) for e in report.entries])
+        root, _version = self.tree.load(done[0].path)
+        self.assertEqual(self.patches.blend_shape_names(root), {"SM_Ball": ["Grow", "Still"]})
+
     def test_retype_root_bones(self):
         rig = fixtures.make_armature("Rig", bones=2, bone_length=10.0)
         cube = fixtures.make_cube("Body", size=10.0)

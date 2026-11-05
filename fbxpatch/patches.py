@@ -420,6 +420,50 @@ def _weights_a_vertex(cluster):
     return indexes is not None and bool(indexes.props) and len(indexes.props[0]) > 0
 
 
+# ---------------------------------------------------------------------- shape keys
+
+
+def drop_still_shapes(root):
+    """Leave out the shape keys that move no vertex, with their channels, and blend shapes left without channels.
+
+    Blender writes such a key as one vertex with a zero offset, and both Unreal importers drop the morph target.
+    Unreal's own exports carry one per morph target on every LOD after the first (a MetaHuman face: 6,006). Channels
+    with animation stay.
+    """
+    result = PatchResult()
+    shapes = {I.object_id(s): s for s in I.find_objects(root, b"Geometry", subclass=b"Shape")}
+    channels = {I.object_id(c) for c in I.find_objects(root, b"Deformer", subclass=b"BlendShapeChannel")}
+    blends = {I.object_id(b) for b in I.find_objects(root, b"Deformer", subclass=b"BlendShape")}
+    shapes_of, channels_of, animated = {}, {}, set()
+    for kind, child, parent, _prop, _e in I.connections(root):
+        if kind == b"OO" and child in shapes and parent in channels:
+            shapes_of.setdefault(parent, set()).add(child)
+        elif kind == b"OO" and child in channels and parent in blends:
+            channels_of.setdefault(parent, set()).add(child)
+        elif kind == b"OP" and parent in channels:
+            animated.add(parent)
+    drop_channels = {
+        channel
+        for channel, members in shapes_of.items()
+        if channel not in animated and all(_moves_nothing(shapes[s]) for s in members)
+    }
+    if not drop_channels:
+        return result
+    drop_shapes = set().union(*(shapes_of[c] for c in drop_channels))
+    drop_blends = {blend for blend, members in channels_of.items() if members <= drop_channels}
+    I.remove_objects(root, drop_shapes | drop_channels | drop_blends)
+    I.definition_count(root, b"Geometry", -len(drop_shapes))
+    I.definition_count(root, b"Deformer", -(len(drop_channels) + len(drop_blends)))
+    result.changed = True
+    result.note(f"{len(drop_channels)} shape key(s) that move no vertex left out")
+    return result
+
+
+def _moves_nothing(shape):
+    offsets = shape.find(b"Vertices")
+    return offsets is None or not offsets.props or not np.any(np.asarray(offsets.props[0], dtype=np.float64))
+
+
 # ---------------------------------------------------------------------- normals
 
 NORMAL_TOL = 1e-3

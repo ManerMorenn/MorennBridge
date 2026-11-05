@@ -466,6 +466,7 @@ def post_process(
     bone_axes_map="",
     material_names=None,
     shape_key_names=None,
+    drop_still_shapes=False,
 ):
     root, version = tree.load(path)
     patches.rename_nodes(root, name_map)
@@ -483,6 +484,8 @@ def post_process(
     if lod_specs:
         _post_notes(report, patches.inject_lod_groups(root, lod_specs))
     _post_notes(report, patches.drop_empty_clusters(root))
+    if drop_still_shapes:
+        _post_notes(report, patches.drop_still_shapes(root))
     _post_notes(report, patches.normals_per_vertex(root))
     tmp = path + ".mbtmp"
     tree.save(tmp, root, version)
@@ -568,6 +571,7 @@ def export_file(context, exported, settings, report):
         bone_axes_map=axes_map_text,
         material_names=exported.material_names,
         shape_key_names=exported.shape_key_names,
+        drop_still_shapes=exported.kind == KIND_SKELETAL,
     )
     exported.extra["bone_axes"] = f"{bone_axes[0]}{bone_axes[1]}"
     if axes_map_text:
