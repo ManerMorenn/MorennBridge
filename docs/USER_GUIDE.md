@@ -153,10 +153,12 @@ flip the convention of a whole rig later (**Convert Bone Axes**) and override th
 
 ## 6. Unreal Link (push and pull)
 
-<img src="images/08_unreal_link.png" width="280" alt="Unreal Link panel">
+<img src="images/08_unreal_link.png" width="280" alt="Unreal Link panel while Allow Online Access is off">
+<img src="images/15_unreal_link_found.png" width="280" alt="Unreal Link panel after Find Unreal found an editor">
 
-With Python remote execution enabled in the Unreal project (one project setting, see `UE_SETUP.md`), **Find
-Unreal** lists the running editors. **Push Last Export to Unreal** imports the last manifest with the correct
+With two plugins enabled in the Unreal project (*Python Editor Script Plugin* and *Editor Scripting Utilities*) and
+*Enable Remote Execution?* on in its project settings (see [Unreal setup](UE_SETUP.md)), **Find Unreal** lists the
+running editors. **Push Last Export to Unreal** imports the last manifest with the correct
 Interchange (or legacy) settings, renames the skeleton and physics asset with your prefixes, links the generated
 collision mesh as Complex Collision Mesh and saves. **Pull Selected Assets from Unreal** exports the assets selected
 in Unreal's Content Browser and imports them here. Blender's *Allow Online Access* preference must be on.
@@ -187,7 +189,7 @@ settings; the defaults are what the rest of this guide describes.
 | **Unreal import** | Which Unreal importer the files target (Interchange, the UE 5.8 default, or legacy); default UE content path; Nanite; lightmap UV generation; physics asset creation; materials and textures; renaming of skeleton/physics asset; saving; animation frame alignment; linking the generated collision mesh as Complex Collision Mesh; letting Unreal recompute tangents. These feed the manifest and the push script. |
 | **Import from Unreal** | Convert bone axes; per-bone axis detection tolerance (45°); bone alignment tolerance for lengths (15°); root, helper and minimum bone lengths (cm); reset pose after mesh import; connect bones when heads touch tails; tidy the hierarchy; animation frame offset. |
 | **Scene setup** | Viewport clip start/end (cm), grid scale, frame rate, start frame at 0, camera clip ranges. |
-| **Unreal remote execution** | Multicast group and port (`239.0.0.1:6766`), bind address (`0.0.0.0` works on macOS), command IP (this machine, `127.0.0.1`), discovery and command timeouts. Must match the Unreal project's Python settings (`UE_SETUP.md`). |
+| **Unreal remote execution** | Multicast group and port (`239.0.0.1:6766`), bind address (`0.0.0.0` works on macOS), command IP (this machine, `127.0.0.1`), discovery and command timeouts. Must match the Unreal project's Python settings ([Unreal setup](UE_SETUP.md)). |
 
 Per-object and per-armature overrides live in the **Object** and **Armature** panels, not in the preferences.
 

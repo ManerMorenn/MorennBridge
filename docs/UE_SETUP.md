@@ -1,6 +1,6 @@
 # Unreal Engine setup for MorennBridge
 
-Written for UE 5.8 from the engine source. See [Support](SUPPORT.md) for what has been confirmed so far.
+For Unreal Engine 5.8, verified with UE 5.8.4 on Windows. See [Support](SUPPORT.md).
 
 ## 1. Importing the files
 Drop the exported `.fbx` files into the Content Browser. The files are already in Unreal's axis system and in
@@ -12,8 +12,15 @@ Recommended folder layout: `/Game/<Project>/Props/SM_*`, `/Game/<Project>/Charac
 manifest records where MorennBridge expects the asset.
 
 ## 2. Push to Unreal: UE 5.8 project settings for remote execution
-1. **Plugins**: enable *Python Editor Script Plugin* (it is loaded anyway by Niagara / RigVM) and
-   *Editor Scripting Utilities*. Restart the editor.
+1. **Edit → Plugins**: enable *Python Editor Script Plugin* and *Editor Scripting Utilities*, then restart the
+   editor. Both are off by default in UE 5.8. Plugins that are on by default load them as dependencies (Niagara and
+   RigVM need Python; Bridge, Fab and PCG need Editor Scripting Utilities), so most projects have them already;
+   enabling them yourself keeps the bridge working in a project that turns those plugins off.
+
+    ![Plugins window, search "Python Editor Script": Python Editor Script Plugin enabled](images/11_ue_plugins_python.png)
+
+    ![Plugins window, search "Editor Scripting Utilities": Editor Scripting Utilities enabled](images/12_ue_plugins_editor_scripting.png)
+
 2. **Edit → Project Settings → Plugins → Python**, section *Python Remote Execution*: *Enable Remote Execution?*
    **on**. It is a project setting, not one of the Editor Preferences where Python's *Developer Mode* is. The
    advanced settings of the section keep their defaults, which match the add-on:
@@ -21,6 +28,8 @@ manifest records where MorennBridge expects the asset.
     - *Multicast Bind Address*: `127.0.0.1`. On macOS/Linux this address sometimes does not receive multicast: set
       `0.0.0.0` when *Find Unreal* finds nothing
     - *Multicast Time-To-Live*: `0` (same machine only)
+
+    <img src="images/13_ue_remote_execution.png" width="504" alt="Project Settings, Plugins, Python: Enable Remote Execution? on, advanced settings at their defaults">
 
     The editor writes the setting to `Config/DefaultEngine.ini`:
 
@@ -30,13 +39,18 @@ manifest records where MorennBridge expects the asset.
     ```
 
 3. **Firewall**: allow the editor to accept local connections (the bridge only uses loopback traffic).
-4. **Interchange FBX translator**: these settings belong to each user and are not in Project Settings. The
-   *Translator Settings* button of the Interchange import dialog opens them; keep *Force Front X Axis* off for
-   manual imports. A push imports with *Force Front X Axis* and the experimental uFBX translator off, then puts your
-   settings back, and the Log says so.
+4. **Interchange FBX translator**: these settings belong to each user and are not in Project Settings. In the
+   Interchange import dialog, the three-dot button at the end of the *Import Source* line opens
+   *Translator Settings*; keep *Force Front XAxis* off for manual imports. A push imports with *Force Front XAxis* and
+   the experimental uFBX translator off, then puts your settings back, and the Log says so.
+
+    <img src="images/14_ue_interchange_translator.png" width="375" alt="Translator Settings of the Interchange import dialog: Force Front XAxis off">
+
 5. **Blender**: Preferences → System → *Allow Online Access* must be enabled, otherwise the add-on refuses to open sockets.
 6. In Blender's *Unreal Link* panel click *Find Unreal*; the project name appears in the list. Export with
    *Push to Unreal after export* enabled, or push the last export manually.
+
+    <img src="images/15_unreal_link_found.png" width="280" alt="Unreal Link panel with the editor found">
 
 While remote execution is on, any program on this machine can run Python in the editor. Keep the TTL at `0`, and
 turn the setting off on shared machines.
@@ -59,3 +73,21 @@ Interchange.FeatureFlags.Import.FBX=0
 - **"No smoothing group information"**: exported with smoothing = *Normals only*; use *Smoothing groups*.
 - **Animation not found / skeleton incompatible**: pick the Skeleton of the matching SKM_ asset; bone names must be
   identical (run *Validate* and fix `E010` on the Blender side).
+
+### Unreal Link
+- **Find Unreal: "No Unreal Editor found (see Setup help)"**: start the editor with the project open, then check
+  steps 1 and 2: both plugins enabled, *Enable Remote Execution?* on, and the editor restarted after enabling the
+  plugins. Blender's *Allow Online Access* must be on; the panel says so when it is off. On macOS and Linux, set the
+  *Multicast Bind Address* to `0.0.0.0` (step 2).
+- **"Unreal (…) did not connect back within 5s; check 'Enable Remote Execution' and the bind address"**: the editor
+  answered *Find Unreal* but could not connect back to Blender. A firewall or security tool blocks the connection
+  (allow the editor and Blender on this machine), or *Command IP* in the add-on preferences is an address the editor
+  cannot reach: keep `127.0.0.1` when both run on the same machine.
+- **"Not pushed to Unreal: no editor found yet, use Find Unreal in the Unreal Link panel"**: *Push to Unreal after
+  export* needs an editor in the list. Click *Find Unreal* once in each Blender session.
+- **"Not pushed to Unreal: the previous push is still running"**: wait until the panel shows *Done* or *Failed*, then
+  click *Push Last Export to Unreal*.
+- **"Unreal reported a Python error while importing (see the UE Output Log)"**: open *Window → Output Log* in the
+  editor; the Python error is there. Blender's Log lists the editor's errors and warnings with a `UE:` prefix.
+- **"No answer from Unreal within 600s"**: the import took longer than *Command timeout* in the add-on preferences,
+  or the editor is waiting on a dialog. Look at the editor; raise the timeout for very large files.

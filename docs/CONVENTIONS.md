@@ -41,14 +41,15 @@ Bone names must survive Unreal's sanitising (`spine.001` would become `spine_001
 
 ## Manual Unreal import settings
 **Interchange (UE 5.8 default)**, in the import dialog:
+
 - Common Meshes: *Recompute Normals* **off**, *Recompute Tangents* on (MikkTSpace), *Bake Meshes* on, *Import LODs* on, *Import Sockets* on, Vertex Color *Replace*.
 - Static Meshes: *Combine Static Meshes* **Do Not Combine** (a combined MorennBridge file then yields one asset per node), *Import Collision According To Mesh Name* on, *One Convex Hull Per UCX* on, Nanite/lightmap UVs as you prefer.
 - Skeletal Meshes: *Import Morph Targets* on, *Use T0 As Ref Pose* off, *Create Physics Asset* as you prefer, *Bone Influence Limit* 0 (engine max) or 8.
 - Animations: *Animation Range* Timeline, *Import Bone Tracks* on; pick the Skeleton created by the mesh import.
 - Materials: Interchange turns every FBX material into a material instance, whatever *New Material Asset Type* says (that setting is for other formats). An existing material of the same name in the destination folder is reused.
-- *Translator Settings* (button in the import dialog, saved per user): *Force Front X Axis* **off**.
+- *Translator Settings* (three-dot button at the end of the dialog's *Import Source* line, saved per user): *Force Front XAxis* **off**.
 
-**Legacy FBX importer** (set `Interchange.FeatureFlags.Import.FBX=0`): Normal Import Method *Import Normals* (and Tangents), *Import Mesh LODs* on, *Convert Scene Unit* on, *Force Front X Axis* off, *Auto Generate Collision* off when UCX pieces are provided. Several meshes in one file are named `<File>_<Node>` by this importer; use one file per asset.
+**Legacy FBX importer** (set `Interchange.FeatureFlags.Import.FBX=0`): Normal Import Method *Import Normals* (and Tangents), *Import Mesh LODs* on, *Convert Scene Unit* on, *Force Front XAxis* off, *Auto Generate Collision* off when UCX pieces are provided. Several meshes in one file are named `<File>_<Node>` by this importer; use one file per asset.
 
 ## Manifest
 Every export writes `<batch>.morenn.json` next to the FBX files. The Unreal-side script consumes it, and your own tools can too. `<batch>` is the name of the .blend file.
