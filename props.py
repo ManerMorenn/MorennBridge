@@ -75,6 +75,16 @@ class MORENN_PG_object(bpy.types.PropertyGroup):
     lod_of: PointerProperty(name="LOD of", type=bpy.types.Object)
     collision_of: PointerProperty(name="Collision of", type=bpy.types.Object)
     collision_type: EnumProperty(name="Collision type", items=COLLISION_TYPE_ITEMS, default="UCX")
+    ue_materials: StringProperty(
+        name="Unreal material slots",
+        description="Slot and material asset of each Blender material, recorded by a pull (JSON). A push names the "
+        "materials after the slots and gives them their material again",
+    )
+    shape_key_names: StringProperty(
+        name="Full shape key names",
+        description="Names of imported shape keys that Blender cut to 63 bytes, shortened name to full name (JSON). "
+        "The export writes the full names",
+    )
 
 
 class MORENN_PG_armature(bpy.types.PropertyGroup):
@@ -95,6 +105,14 @@ class MORENN_PG_bone(bpy.types.PropertyGroup):
         description="Unreal-space axis that runs along this bone (DEFAULT = armature convention)",
     )
     axis_secondary: EnumProperty(name="UE secondary axis", items=AXIS_OR_DEFAULT_ITEMS, default="DEFAULT")
+
+
+class MORENN_PG_action(bpy.types.PropertyGroup):
+    ue_settings: StringProperty(
+        name="Unreal settings",
+        description="Animation settings that exist only in Unreal (root motion, retarget source...), JSON. "
+        "Pull records them, Push sets them again",
+    )
 
 
 class MORENN_PG_scene(bpy.types.PropertyGroup):
@@ -143,6 +161,7 @@ classes = (
     MORENN_PG_object,
     MORENN_PG_armature,
     MORENN_PG_bone,
+    MORENN_PG_action,
     MORENN_PG_scene,
     MORENN_PG_uenode,
     MORENN_PG_runtime,
@@ -155,6 +174,7 @@ def register():
     bpy.types.Object.morenn = PointerProperty(type=MORENN_PG_object)
     bpy.types.Armature.morenn = PointerProperty(type=MORENN_PG_armature)
     bpy.types.Bone.morenn = PointerProperty(type=MORENN_PG_bone)
+    bpy.types.Action.morenn = PointerProperty(type=MORENN_PG_action)
     bpy.types.Scene.morenn = PointerProperty(type=MORENN_PG_scene)
     bpy.types.WindowManager.morenn_rt = PointerProperty(type=MORENN_PG_runtime)
 
@@ -162,6 +182,7 @@ def register():
 def unregister():
     del bpy.types.WindowManager.morenn_rt
     del bpy.types.Scene.morenn
+    del bpy.types.Action.morenn
     del bpy.types.Bone.morenn
     del bpy.types.Armature.morenn
     del bpy.types.Object.morenn

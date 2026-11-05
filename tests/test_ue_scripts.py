@@ -1,0 +1,733 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""The editor-side scripts (ue/scripts) run against tests/fake_unreal.py instead of the Unreal Editor."""
+
+import importlib.util
+import json
+import os
+import runpy
+import shutil
+import sys
+import tempfile
+import types
+import unittest
+from unittest import mock
+
+import bpy
+
+from tests import fake_unreal as U
+from tests import fixtures
+from tests.test_export_anim import _animated_character
+
+SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ue", "scripts")
+SCRIPT_MODULES = ("mb_ue_common", "mb_ue_import", "mb_ue_export")
+
+OPTIONS = {
+    "build_nanite": False,
+    "generate_lightmap_uvs": False,
+    "create_physics_asset": True,
+    "import_materials": True,
+    "import_textures": False,
+    "influence_limit": 8,
+    "frame_alignment": "NONE",
+    "recompute_tangents": True,
+    "save": True,
+    "rename_skeleton": True,
+    "skeleton_prefix": "SKEL_",
+    "physics_prefix": "PHYS_",
+    "link_complex_collision": True,
+}
+
+
+class UnrealScriptCase(unittest.TestCase):
+    def setUp(self):
+        U.reset()
+        self.saved_path = list(sys.path)
+        self.saved_unreal = sys.modules.get("unreal")
+        sys.modules["unreal"] = U
+        for name in SCRIPT_MODULES:
+            sys.modules.pop(name, None)
+        self.tmp = tempfile.mkdtemp(prefix="morenn_ue_")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def tearDown(self):
+        for name in SCRIPT_MODULES:
+            sys.modules.pop(name, None)
+        if self.saved_unreal is None:
+            sys.modules.pop("unreal", None)
+        else:
+            sys.modules["unreal"] = self.saved_unreal
+        sys.path[:] = self.saved_path
+
+    def load(self, name):
+        spec = importlib.util.spec_from_file_location(name, os.path.join(SCRIPTS, f"{name}.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def item(self, kind, name, assets=None, single=True, destination="/Game/MB", **extra):
+        path = os.path.join(self.tmp, f"{name}.fbx")
+        with open(path, "wb") as fh:
+            fh.write(b"")
+        item = {
+            "file": f"{name}.fbx",
+            "path": path,
+            "kind": kind,
+            "destination_path": destination,
+            "single_asset": single,
+            "assets": assets if assets is not None else [{"node": name, "name": name}],
+        }
+        item.update(extra)
+        return item
+
+    def write_manifest(self, items, importer="INTERCHANGE", **options):
+        data = {"version": 1, "ue_importer": importer, "options": dict(OPTIONS, **options), "items": items}
+        path = os.path.join(self.tmp, "batch.morenn.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        return path
+
+    def import_manifest(self, items, importer="INTERCHANGE", **options):
+        path = self.write_manifest(items, importer, **options)
+        report = self.load("mb_ue_import").run(path)
+        return report, path
+
+    def assert_no_property_warnings(self):
+        problems = [m for m in U.messages("Warning") if "not found" in m or "Could not set" in m]
+        self.assertEqual(problems, [])
+
+    def pipeline(self, index=-1):
+        return U.STATE.imports[index]["pipelines"][0]
+
+
+class InterchangeImportTests(UnrealScriptCase):
+    def test_static_mesh_with_explicit_pipeline_settings(self):
+        item = self.item("STATIC_MESH", "SM_Crate")
+        U.plan_import(item["path"], [("StaticMesh", "SM_Crate"), ("Material", "M_Test")])
+        report, manifest = self.import_manifest([item])
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["engine"], U.ENGINE_VERSION)
+        self.assertIn("/Game/MB/SM_Crate", report["items"][0]["imported"])
+        with open(manifest + ".result.json", encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["items"][0]["file"], "SM_Crate.fbx")
+        call = U.STATE.imports[0]
+        self.assertEqual(call["content_path"], "/Game/MB")
+        params = call["params"]
+        self.assertTrue(params.get_editor_property("is_automated"))
+        self.assertTrue(params.get_editor_property("replace_existing"))
+        self.assertEqual(params.get_editor_property("destination_name"), "SM_Crate")
+        p = self.pipeline()
+        self.assertTrue(p.get_editor_property("use_source_name_for_asset"))
+        common = p.get_editor_property("common_meshes_properties")
+        self.assertIs(common.get_editor_property("force_all_mesh_as_type"), U.InterchangeForceMeshType.IFMT_STATIC_MESH)
+        self.assertFalse(common.get_editor_property("recompute_normals"))
+        self.assertTrue(common.get_editor_property("recompute_tangents"))
+        self.assertFalse(common.get_editor_property("convert_statics_in_bone_hierarchy_to_skeletals"))
+        mesh = p.get_editor_property("mesh_pipeline")
+        self.assertTrue(mesh.get_editor_property("import_static_meshes"))
+        self.assertFalse(mesh.get_editor_property("import_skeletal_meshes"))
+        self.assertFalse(mesh.get_editor_property("build_nanite"))
+        self.assertEqual(mesh.get_editor_property("bone_influence_limit"), 8)
+        self.assertIs(
+            mesh.get_editor_property("combine_static_meshes_behavior"),
+            U.InterchangeCombineStaticMeshesBehavior.DO_NOT_COMBINE,
+        )
+        self.assertFalse(p.get_editor_property("animation_pipeline").get_editor_property("import_animations"))
+        texture = p.get_editor_property("material_pipeline").get_editor_property("texture_pipeline")
+        self.assertFalse(texture.get_editor_property("import_textures"))
+        self.assertIn("/Game/MB/SM_Crate", U.STATE.saved)
+        self.assert_no_property_warnings()
+
+    def test_combined_file_names_assets_after_the_nodes(self):
+        assets = [{"node": "SM_A", "name": "SM_A"}, {"node": "SM_B", "name": "SM_B"}]
+        item = self.item("STATIC_MESH", "Props", assets=assets, single=False)
+        U.plan_import(item["path"], [("StaticMesh", "SM_A"), ("StaticMesh", "SM_B")])
+        report, _ = self.import_manifest([item])
+        self.assertTrue(report["ok"])
+        self.assertFalse(self.pipeline().get_editor_property("use_source_name_for_asset"))
+        self.assertEqual(U.STATE.imports[0]["params"].get_editor_property("destination_name"), "")
+        self.assertEqual(sorted(report["items"][0]["imported"]), ["/Game/MB/SM_A", "/Game/MB/SM_B"])
+
+    def test_skeleton_and_physics_asset_get_their_prefixes(self):
+        item = self.item("SKELETAL_MESH", "SKM_Hero", source_armature="Hero", skeleton=None)
+        U.plan_import(
+            item["path"],
+            [
+                ("SkeletalMesh", "SKM_Hero"),
+                ("Skeleton", "SKM_Hero_Skeleton"),
+                ("PhysicsAsset", "SKM_Hero_PhysicsAsset"),
+            ],
+        )
+        report, _ = self.import_manifest([item])
+        result = report["items"][0]
+        self.assertTrue(result["success"])
+        self.assertEqual(result["skeleton"], "/Game/MB/SKEL_Hero")
+        self.assertEqual(result["source_armature"], "Hero")
+        self.assertIn(["/Game/MB/SKM_Hero_PhysicsAsset", "/Game/MB/PHYS_Hero"], result["renamed"])
+        self.assertTrue(U.EditorAssetLibrary.does_asset_exist("/Game/MB/SKEL_Hero"))
+        common = self.pipeline().get_editor_property("common_meshes_properties")
+        self.assertIs(
+            common.get_editor_property("force_all_mesh_as_type"), U.InterchangeForceMeshType.IFMT_SKELETAL_MESH
+        )
+        mesh = self.pipeline().get_editor_property("mesh_pipeline")
+        self.assertTrue(mesh.get_editor_property("import_skeletal_meshes"))
+        self.assertTrue(mesh.get_editor_property("create_physics_asset"))
+        self.assert_no_property_warnings()
+
+    def test_existing_names_are_not_overwritten_by_renames(self):
+        U.add_asset("Skeleton", "/Game/MB/SKEL_Hero")
+        item = self.item("SKELETAL_MESH", "SKM_Hero", source_armature="Hero")
+        U.plan_import(item["path"], [("SkeletalMesh", "SKM_Hero"), ("Skeleton", "SKM_Hero_Skeleton")])
+        report, _ = self.import_manifest([item])
+        self.assertEqual(report["items"][0]["skeleton"], "/Game/MB/SKM_Hero_Skeleton")
+        self.assertTrue(any("already exists" in m for m in U.messages("Warning")))
+
+    def test_imported_list_is_what_the_importer_created(self):
+        U.add_asset("StaticMesh", "/Game/MB/SM_Rock_Big")
+        item = self.item("STATIC_MESH", "SM_Rock")
+        U.plan_import(item["path"], [("StaticMesh", "SM_Rock"), ("Material", "M_Stone")])
+        report, _ = self.import_manifest([item])
+        self.assertEqual(report["items"][0]["imported"], ["/Game/MB/SM_Rock", "/Game/MB/M_Stone"])
+        self.assertEqual(U.STATE.saved, ["/Game/MB/SM_Rock", "/Game/MB/M_Stone"])
+
+    def test_assets_left_by_an_earlier_push_do_not_hide_a_failure(self):
+        U.add_asset("StaticMesh", "/Game/MB/SM_Crate")
+        item = self.item("STATIC_MESH", "SM_Crate")
+        report, _ = self.import_manifest([item])
+        self.assertFalse(report["items"][0]["success"])
+        self.assertEqual(report["items"][0]["imported"], [])
+
+    def test_renamed_assets_are_listed_and_saved_under_their_new_names(self):
+        item = self.item("SKELETAL_MESH", "SKM_Hero")
+        U.plan_import(
+            item["path"],
+            [
+                ("SkeletalMesh", "SKM_Hero"),
+                ("Skeleton", "SKM_Hero_Skeleton"),
+                ("PhysicsAsset", "SKM_Hero_PhysicsAsset"),
+            ],
+        )
+        report, _ = self.import_manifest([item])
+        expected = ["/Game/MB/SKM_Hero", "/Game/MB/SKEL_Hero", "/Game/MB/PHYS_Hero"]
+        self.assertEqual(report["items"][0]["imported"], expected)
+        self.assertEqual(U.STATE.saved, expected)
+
+    def test_announced_assets_that_were_not_created_are_warnings(self):
+        assets = [{"node": "SM_A", "name": "SM_A"}, {"node": "SM_B", "name": "SM_B"}]
+        item = self.item("STATIC_MESH", "Props", assets=assets, single=False)
+        U.plan_import(item["path"], [("StaticMesh", "Props")])
+        report, _ = self.import_manifest([item])
+        result = report["items"][0]
+        self.assertTrue(result["success"])
+        self.assertEqual(result["warnings"], ["/Game/MB/SM_A was not created", "/Game/MB/SM_B was not created"])
+
+    def test_animation_uses_the_skeleton_imported_in_the_same_batch(self):
+        mesh = self.item("SKELETAL_MESH", "SKM_Hero", source_armature="Hero")
+        anim = self.item("ANIMATION", "A_Hero_Run", source_armature="Hero", skeleton=None, fps=30)
+        U.plan_import(mesh["path"], [("SkeletalMesh", "SKM_Hero"), ("Skeleton", "SKM_Hero_Skeleton")])
+        U.plan_import(anim["path"], [("AnimSequence", "A_Hero_Run")])
+        report, _ = self.import_manifest([mesh, anim])
+        self.assertTrue(report["ok"])
+        p = self.pipeline()
+        skeletal = p.get_editor_property("common_skeletal_meshes_and_animations_properties")
+        self.assertIs(skeletal.get_editor_property("skeleton"), U.load_asset("/Game/MB/SKEL_Hero"))
+        self.assertTrue(skeletal.get_editor_property("import_only_animations"))
+        animation = p.get_editor_property("animation_pipeline")
+        self.assertTrue(animation.get_editor_property("import_animations"))
+        self.assertEqual(animation.get_editor_property("custom_bone_animation_sample_rate"), 30)
+        self.assertIs(animation.get_editor_property("animation_range"), U.InterchangeAnimationRange.TIMELINE)
+        self.assertIs(
+            p.get_editor_property("common_meshes_properties").get_editor_property("force_all_mesh_as_type"),
+            U.InterchangeForceMeshType.IFMT_NONE,
+        )
+        self.assert_no_property_warnings()
+
+    def test_pulled_animation_settings_are_set_again(self):
+        source = U.add_asset("SkeletalMesh", "/Game/Characters/SKM_Hero")
+        U.add_asset("Skeleton", "/Game/Characters/SKEL_Hero")
+        settings = {
+            "enable_root_motion": True,
+            "root_motion_root_lock": "ANIM_FIRST_FRAME",
+            "force_root_lock": True,
+            "retarget_source": "None",
+            "retarget_source_asset": "/Game/Characters/SKM_Hero",
+            "rate_scale": 0.5,
+            "interpolation": "STEP",
+            "ref_pose_seq": None,
+        }
+        anim = self.item("ANIMATION", "A_Hero_Jog", skeleton="/Game/Characters/SKEL_Hero", fps=30, ue_settings=settings)
+        U.plan_import(anim["path"], [("AnimSequence", "A_Hero_Jog")])
+        report, _ = self.import_manifest([anim])
+        self.assertTrue(report["ok"], report)
+        result = report["items"][0]
+        self.assertEqual(sorted(result["settings"]), sorted(settings))
+        self.assertEqual(result["warnings"], [])
+        asset = U.load_asset("/Game/MB/A_Hero_Jog")
+        self.assertTrue(asset.get_editor_property("enable_root_motion"))
+        self.assertTrue(asset.get_editor_property("force_root_lock"))
+        self.assertIs(asset.get_editor_property("root_motion_root_lock"), U.RootMotionRootLock.ANIM_FIRST_FRAME)
+        self.assertIs(asset.get_editor_property("retarget_source_asset"), source)
+        self.assertIs(asset.get_editor_property("interpolation"), U.AnimInterpolationType.STEP)
+        self.assertEqual(asset.get_editor_property("rate_scale"), 0.5)
+        self.assertIn("/Game/MB/A_Hero_Jog", U.STATE.saved)
+
+    def test_pulled_slots_get_their_material_back(self):
+        """The FBX materials carry the slot names; the push swaps the copies Interchange made for the originals."""
+        for name in ("MI_Manny_01", "MI_Manny_02"):
+            U.add_asset("MaterialInstanceConstant", f"/Game/Mats/{name}")
+        U.add_asset("MaterialInstanceConstant", "/Game/MB/M_Old")  # in the folder before the push
+        wanted = {
+            "M_HeadLegs": "/Game/Mats/MI_Manny_01",
+            "M_Torso": "/Game/Mats/MI_Manny_02",
+            "M_Old": "/Game/Mats/MI_Manny_01",
+            "M_Lost": "/Game/Gone/MI_Lost",
+        }
+        assets = [{"node": "SKM_Manny", "name": "SKM_Manny", "ue_materials": wanted}]
+        item = self.item("SKELETAL_MESH", "SKM_Manny", assets=assets, skeleton="/Game/MB/SKEL_Manny")
+        slots = [(s, s) for s in ("M_HeadLegs", "M_Torso", "M_New", "M_Old", "M_Lost")]
+        made = [("MaterialInstanceConstant", m) for m in ("M_HeadLegs", "M_Torso", "M_New", "M_Lost")]
+        U.plan_import(item["path"], made + [("SkeletalMesh", "SKM_Manny", slots)])
+        report, _ = self.import_manifest([item])
+        self.assertTrue(report["ok"], report)
+        result = report["items"][0]
+        self.assertEqual(result["materials"], ["M_HeadLegs", "M_Torso", "M_Old"])
+        self.assertEqual(result["removed"], ["/Game/MB/M_HeadLegs", "/Game/MB/M_Torso"])
+        self.assertEqual(
+            result["warnings"], ["SKM_Manny: /Game/Gone/MI_Lost not found; the slot keeps the imported material"]
+        )
+        self.assertNotIn("/Game/MB/M_HeadLegs", result["imported"])
+        mesh = U.load_asset("/Game/MB/SKM_Manny")
+        got = {
+            s.get_editor_property("material_slot_name"): s.get_editor_property("material_interface")
+            for s in mesh.get_editor_property("materials")
+        }
+        self.assertIs(got["M_HeadLegs"], U.load_asset("/Game/Mats/MI_Manny_01"))
+        self.assertIs(got["M_New"], U.load_asset("/Game/MB/M_New"))
+        self.assertIs(got["M_Lost"], U.load_asset("/Game/MB/M_Lost"))
+        for kept in ("/Game/MB/M_New", "/Game/MB/M_Lost", "/Game/MB/M_Old"):
+            self.assertTrue(U.EditorAssetLibrary.does_asset_exist(kept), kept)
+
+    def test_settings_that_cannot_be_set_again_are_warnings(self):
+        settings = {
+            "enable_root_motion": True,
+            "root_motion_root_lock": "NO_SUCH_LOCK",
+            "retarget_source_asset": "/Game/Gone/SKM_Old",
+            "rate_scale": "fast",
+        }
+        anim = self.item("ANIMATION", "A_Hero_Jog", fps=30, ue_settings=settings)
+        U.plan_import(anim["path"], [("AnimSequence", "A_Hero_Jog")])
+        report, _ = self.import_manifest([anim])
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["items"][0]["settings"], ["enable_root_motion"])
+        self.assertEqual(
+            report["items"][0]["warnings"],
+            ["A_Hero_Jog: settings not restored: root_motion_root_lock, retarget_source_asset, rate_scale"],
+        )
+        self.assertTrue(U.load_asset("/Game/MB/A_Hero_Jog").get_editor_property("enable_root_motion"))
+
+    def test_generated_collision_mesh_becomes_the_complex_collision(self):
+        assets = [
+            {"node": "SM_Rock", "name": "SM_Rock", "collision_mesh": "SM_Rock_COLL", "collision_ratio": 0.1},
+            {"node": "SM_Rock_COLL", "name": "SM_Rock_COLL", "role": "COLLISION_MESH"},
+        ]
+        item = self.item("STATIC_MESH", "SM_Rock", assets=assets, single=False)
+        U.plan_import(item["path"], [("StaticMesh", "SM_Rock"), ("StaticMesh", "SM_Rock_COLL")])
+        report, _ = self.import_manifest([item])
+        self.assertEqual(report["items"][0]["complex_collision"], "/Game/MB/SM_Rock_COLL")
+        rock = U.load_asset("/Game/MB/SM_Rock")
+        self.assertIs(rock.get_editor_property("complex_collision_mesh"), U.load_asset("/Game/MB/SM_Rock_COLL"))
+
+    def test_options_can_skip_renames_links_and_saving(self):
+        item = self.item("SKELETAL_MESH", "SKM_Hero")
+        U.plan_import(item["path"], [("SkeletalMesh", "SKM_Hero"), ("Skeleton", "SKM_Hero_Skeleton")])
+        report, _ = self.import_manifest([item], rename_skeleton=False, save=False, link_complex_collision=False)
+        self.assertEqual(report["items"][0]["renamed"], [])
+        self.assertEqual(report["items"][0]["skeleton"], "/Game/MB/SKM_Hero_Skeleton")
+        self.assertEqual(U.STATE.saved, [])
+
+    def test_frame_alignment_and_sample_rate_follow_the_manifest(self):
+        for option, expected in (
+            ("SNAP_TO_CLOSEST", U.InterchangeFrameAlignment.SNAP_TO_CLOSEST),
+            ("NONE", U.InterchangeFrameAlignment.NONE),
+        ):
+            with self.subTest(option=option):
+                U.reset()
+                anim = self.item("ANIMATION", "A_Hero_Run", fps=30000 / 1001)
+                U.plan_import(anim["path"], [("AnimSequence", "A_Hero_Run")])
+                report, _ = self.import_manifest([anim], frame_alignment=option)
+                self.assertTrue(report["ok"])
+                animation = self.pipeline().get_editor_property("animation_pipeline")
+                self.assertIs(animation.get_editor_property("frame_alignment"), expected)
+                self.assertEqual(animation.get_editor_property("custom_bone_animation_sample_rate"), 30)
+                self.assert_no_property_warnings()
+
+    def test_failed_import_is_reported(self):
+        item = self.item("STATIC_MESH", "SM_Crate")
+        report, _ = self.import_manifest([item])
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["items"][0]["errors"], ["Importer reported failure"])
+
+    def test_exception_inside_an_item_is_reported(self):
+        item = self.item("STATIC_MESH", "SM_Crate")
+        with mock.patch.object(U.InterchangeManager, "import_asset", side_effect=RuntimeError("boom")):
+            report, _ = self.import_manifest([item])
+        self.assertFalse(report["ok"])
+        self.assertIn("boom", report["items"][0]["errors"][0])
+        self.assertTrue(any("SM_Crate.fbx" in m for m in U.messages("Error")))
+
+
+class TranslatorSettingsTests(UnrealScriptCase):
+    CONFIG = "InterchangeFbxTranslatorSettings"
+
+    def push_crate(self, importer="INTERCHANGE"):
+        item = self.item("STATIC_MESH", "SM_Crate")
+        U.plan_import(item["path"], [("StaticMesh", "SM_Crate")])
+        report, _ = self.import_manifest([item], importer=importer)
+        return report
+
+    def test_user_settings_are_used_when_they_fit(self):
+        report = self.push_crate()
+        self.assertEqual(report["warnings"], [])
+        self.assertEqual(U.STATE.translator_config, {})
+
+    def test_unusable_settings_are_off_during_the_import_only(self):
+        user = {"force_front_x_axis": True, "use_ufbx_parser": True, "convert_scene": True}
+        U.STATE.translator_config[self.CONFIG] = dict(user)
+        report = self.push_crate()
+        self.assertTrue(report["ok"])
+        used = U.STATE.imports[0]["translator"]
+        self.assertFalse(used["force_front_x_axis"])
+        self.assertFalse(used["use_ufbx_parser"])
+        restored = U.STATE.translator_config[self.CONFIG]
+        self.assertEqual({k: restored[k] for k in user}, user)
+        self.assertEqual(len(report["warnings"]), 1)
+        self.assertIn("Force Front X Axis, Use uFBX Translator off", report["warnings"][0])
+
+    def test_legacy_imports_leave_the_translator_alone(self):
+        U.STATE.translator_config[self.CONFIG] = {"force_front_x_axis": True}
+        report = self.push_crate(importer="LEGACY")
+        self.assertEqual(report["warnings"], [])
+        self.assertEqual(U.STATE.translator_config[self.CONFIG], {"force_front_x_axis": True})
+
+    def test_problems_with_the_settings_do_not_stop_the_import(self):
+        failing_once = [RuntimeError("no ini"), None]
+        with mock.patch.object(U.InterchangeTranslatorSettings, "load_settings", side_effect=failing_once):
+            report = self.push_crate()
+        self.assertTrue(report["ok"])
+        self.assertIn("Could not check the Interchange FBX translator settings: no ini", report["warnings"])
+        U.reset()
+        U.STATE.translator_config[self.CONFIG] = {"force_front_x_axis": True}
+        original = U.InterchangeTranslatorSettings.save_settings
+        calls = []
+
+        def save_once(settings):
+            calls.append(1)
+            if len(calls) > 1:
+                raise RuntimeError("read-only ini")
+            original(settings)
+
+        with mock.patch.object(U.InterchangeTranslatorSettings, "save_settings", save_once):
+            report = self.push_crate()
+        self.assertTrue(report["ok"])
+        self.assertIn("Could not restore the Interchange FBX translator settings: read-only ini", report["warnings"])
+
+
+class LegacyImportTests(UnrealScriptCase):
+    def test_static_mesh_task(self):
+        item = self.item("STATIC_MESH", "SM_Crate")
+        U.plan_import(item["path"], [("StaticMesh", "SM_Crate")])
+        report, _ = self.import_manifest([item], importer="LEGACY", generate_lightmap_uvs=True)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["items"][0]["imported"], ["/Game/MB/SM_Crate"])
+        task = U.STATE.imports[0]["task"]
+        self.assertIsInstance(task.get_editor_property("factory"), U.FbxFactory)
+        self.assertEqual(task.get_editor_property("destination_name"), "SM_Crate")
+        self.assertTrue(task.get_editor_property("automated"))
+        ui = task.get_editor_property("options")
+        self.assertIs(ui.get_editor_property("mesh_type_to_import"), U.FBXImportType.FBXIT_STATIC_MESH)
+        self.assertFalse(ui.get_editor_property("import_as_skeletal"))
+        static = ui.get_editor_property("static_mesh_import_data")
+        self.assertIs(
+            static.get_editor_property("normal_import_method"),
+            U.FBXNormalImportMethod.FBXNIM_IMPORT_NORMALS_AND_TANGENTS,
+        )
+        self.assertTrue(static.get_editor_property("import_mesh_lods"))
+        self.assertTrue(static.get_editor_property("generate_lightmap_u_vs"))
+        self.assertFalse(static.get_editor_property("auto_generate_collision"))
+        self.assertTrue(static.get_editor_property("convert_scene_unit"))
+        self.assertFalse(static.get_editor_property("force_front_x_axis"))
+        self.assertIs(static.get_editor_property("vertex_color_import_option"), U.VertexColorImportOption.REPLACE)
+
+    def test_skeletal_mesh_and_animation_tasks(self):
+        mesh = self.item("SKELETAL_MESH", "SKM_Hero", source_armature="Hero")
+        anim = self.item("ANIMATION", "A_Hero_Run", source_armature="Hero", fps=24)
+        made = [
+            ("SkeletalMesh", "SKM_Hero"),
+            ("Skeleton", "SKM_Hero_Skeleton"),
+            ("PhysicsAsset", "SKM_Hero_PhysicsAsset"),
+        ]
+        U.plan_import(mesh["path"], made)
+        U.plan_import(anim["path"], [("AnimSequence", "A_Hero_Run")])
+        report, _ = self.import_manifest([mesh, anim], importer="LEGACY")
+        self.assertTrue(report["ok"])
+        # the legacy importer lists only the mesh; its skeleton and physics asset are found through it
+        self.assertEqual(
+            report["items"][0]["imported"], ["/Game/MB/SKM_Hero", "/Game/MB/SKEL_Hero", "/Game/MB/PHYS_Hero"]
+        )
+        self.assertIs(
+            U.load_asset("/Game/MB/SKM_Hero").get_editor_property("skeleton"), U.load_asset("/Game/MB/SKEL_Hero")
+        )
+        mesh_ui = U.STATE.imports[0]["task"].get_editor_property("options")
+        self.assertTrue(mesh_ui.get_editor_property("import_as_skeletal"))
+        skeletal = mesh_ui.get_editor_property("skeletal_mesh_import_data")
+        self.assertTrue(skeletal.get_editor_property("import_morph_targets"))
+        self.assertTrue(skeletal.get_editor_property("import_mesh_lods"))
+        self.assertFalse(skeletal.get_editor_property("import_meshes_in_bone_hierarchy"))
+        anim_ui = U.STATE.imports[1]["task"].get_editor_property("options")
+        self.assertIs(anim_ui.get_editor_property("mesh_type_to_import"), U.FBXImportType.FBXIT_ANIMATION)
+        self.assertIs(anim_ui.get_editor_property("skeleton"), U.load_asset("/Game/MB/SKEL_Hero"))
+        data = anim_ui.get_editor_property("anim_sequence_import_data")
+        self.assertEqual(data.get_editor_property("custom_sample_rate"), 24)
+        self.assertFalse(data.get_editor_property("use_default_sample_rate"))
+        self.assertIs(
+            data.get_editor_property("animation_length"), U.FBXAnimationLengthImportType.FBXALIT_EXPORTED_TIME
+        )
+        self.assertFalse(data.get_editor_property("snap_to_closest_frame_boundary"))
+
+
+class EntryPointTests(UnrealScriptCase):
+    def run_script(self, name, *args):
+        with mock.patch.object(sys, "argv", [os.path.join(SCRIPTS, name), *args]):
+            runpy.run_path(os.path.join(SCRIPTS, name), run_name="__main__")
+
+    def test_import_script_writes_the_result_next_to_the_manifest(self):
+        item = self.item("STATIC_MESH", "SM_Crate")
+        U.plan_import(item["path"], [("StaticMesh", "SM_Crate")])
+        manifest = self.write_manifest([item])
+        self.run_script("mb_ue_import.py", manifest)
+        with open(manifest + ".result.json", encoding="utf-8") as fh:
+            self.assertTrue(json.load(fh)["ok"])
+
+    def test_scripts_need_their_arguments(self):
+        self.run_script("mb_ue_import.py")
+        self.run_script("mb_ue_export.py", "")
+        errors = U.messages("Error")
+        self.assertTrue(any("usage: mb_ue_import.py" in m for m in errors))
+        self.assertTrue(any("usage: mb_ue_export.py" in m for m in errors))
+
+    def test_export_script_exports_the_selection(self):
+        U.STATE.selected = [U.add_asset("StaticMesh", "/Game/MB/SM_Crate")]
+        out = os.path.join(self.tmp, "pull")
+        self.run_script("mb_ue_export.py", out)
+        with open(os.path.join(out, "pull.result.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["items"][0]["kind"], "STATIC_MESH")
+
+    def test_scripts_use_the_helpers_next_to_them(self):
+        stale = types.ModuleType("mb_ue_common")  # left in a running editor by an older add-on or another folder
+        sys.modules["mb_ue_common"] = stale
+        for name in ("mb_ue_import", "mb_ue_export"):
+            module = self.load(name)
+            self.assertIsNot(module.C, stale)
+            self.assertTrue(os.path.samefile(module.C.__file__, os.path.join(SCRIPTS, "mb_ue_common.py")))
+            self.assertIs(sys.modules["mb_ue_common"], module.C)
+
+
+class ExportScriptTests(UnrealScriptCase):
+    def test_selected_assets_are_exported_with_fixed_options(self):
+        skeleton = U.add_asset("Skeleton", "/Game/MB/SKEL_Hero")
+        mesh = U.add_asset("SkeletalMesh", "/Game/MB/SKM_Hero")
+        mesh._values["skeleton"] = skeleton
+        anim = U.add_asset("AnimSequence", "/Game/MB/A_Hero_Run")
+        anim._values["skeleton"] = skeleton
+        U.STATE.selected = [
+            U.add_asset("StaticMesh", "/Game/MB/SM_Crate"),
+            mesh,
+            anim,
+            U.add_asset("Material", "/Game/MB/M_A"),
+        ]
+        report = self.load("mb_ue_export").run(self.tmp, [])
+        kinds = [i.get("kind") for i in report["items"]]
+        self.assertEqual(kinds, ["STATIC_MESH", "SKELETAL_MESH", "ANIMATION", None])
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["items"][1]["skeleton"], "/Game/MB/SKEL_Hero")
+        self.assertEqual(report["items"][2]["skeleton"], "/Game/MB/SKEL_Hero")
+        self.assertIn("Unsupported class Material", report["items"][3]["errors"][0])
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "SM_Crate.fbx")))
+        task = U.STATE.exports[0]
+        self.assertIsInstance(task.get_editor_property("exporter"), U.StaticMeshExporterFBX)
+        self.assertFalse(task.get_editor_property("prompt"))
+        options = task.get_editor_property("options")
+        self.assertIs(options.get_editor_property("fbx_export_compatibility"), U.FbxExportCompatibility.FBX_2013)
+        self.assertFalse(options.get_editor_property("force_front_x_axis"))
+        self.assertTrue(options.get_editor_property("collision"))
+        self.assert_no_property_warnings()
+
+    def test_material_slots_are_recorded(self):
+        material = U.add_asset("MaterialInstanceConstant", "/Game/Mats/MI_Manny_01")
+        mesh = U.add_asset("SkeletalMesh", "/Game/MB/SKM_Manny")
+        mesh._values["materials"] = [
+            U.SkeletalMaterial(material_slot_name="M_HeadLegs", material_interface=material),
+            U.SkeletalMaterial(material_slot_name="M_Empty"),
+        ]
+        crate = U.add_asset("StaticMesh", "/Game/MB/SM_Crate")
+        crate._values["static_materials"] = [U.StaticMaterial(material_slot_name="Wood", material_interface=material)]
+        report = self.load("mb_ue_export").run(self.tmp, ["/Game/MB/SKM_Manny", "/Game/MB/SM_Crate"])
+        self.assertEqual(
+            report["items"][0]["materials"],
+            [{"slot": "M_HeadLegs", "material": "/Game/Mats/MI_Manny_01"}, {"slot": "M_Empty", "material": None}],
+        )
+        self.assertEqual(report["items"][1]["materials"], [{"slot": "Wood", "material": "/Game/Mats/MI_Manny_01"}])
+
+    def test_unreal_only_animation_settings_are_recorded(self):
+        mesh = U.add_asset("SkeletalMesh", "/Game/Characters/SKM_Hero")
+        anim = U.add_asset("AnimSequence", "/Game/MB/A_Hero_Jog")
+        anim.set_editor_property("enable_root_motion", True)
+        anim.set_editor_property("root_motion_root_lock", U.RootMotionRootLock.ANIM_FIRST_FRAME)
+        anim.set_editor_property("retarget_source_asset", mesh)
+        anim.set_editor_property("rate_scale", 1.5)
+        with mock.patch.dict(U.AnimSequence._props):
+            del U.AnimSequence._props["use_normalized_root_motion_scale"]  # older engines lack some
+            report = self.load("mb_ue_export").run(self.tmp, ["/Game/MB/A_Hero_Jog"])
+        settings = report["items"][0]["settings"]
+        self.assertEqual(json.loads(json.dumps(settings)), settings)
+        self.assertTrue(settings["enable_root_motion"])
+        self.assertEqual(settings["root_motion_root_lock"], "ANIM_FIRST_FRAME")
+        self.assertEqual(settings["retarget_source_asset"], "/Game/Characters/SKM_Hero")
+        self.assertEqual(settings["retarget_source"], "None")
+        self.assertEqual(settings["rate_scale"], 1.5)
+        self.assertIsNone(settings["ref_pose_seq"])
+        self.assertNotIn("use_normalized_root_motion_scale", settings)
+
+    def test_assets_given_by_path(self):
+        U.add_asset("StaticMesh", "/Game/MB/SM_Crate")
+        report = self.load("mb_ue_export").run(self.tmp, ["/Game/MB/SM_Crate", "/Game/MB/Missing"])
+        self.assertEqual([i["asset_path"] for i in report["items"]], ["/Game/MB/SM_Crate"])
+        self.assertTrue(any("Asset not found: /Game/MB/Missing" in m for m in U.messages("Warning")))
+
+    def test_no_selection_api(self):
+        with mock.patch.object(U.EditorUtilityLibrary, "get_selected_assets", side_effect=RuntimeError("no UI")):
+            report = self.load("mb_ue_export").run(self.tmp, [])
+        self.assertEqual(report["items"], [])
+
+
+class CommonHelperTests(UnrealScriptCase):
+    def test_setp_tries_alternatives_and_warns_when_nothing_fits(self):
+        C = self.load("mb_ue_common")
+        options = U.FbxExportOption()
+        self.assertTrue(C.setp(options, "no_such_name", True, alternatives=("ascii",)))
+        self.assertTrue(options.get_editor_property("ascii"))
+        self.assertFalse(C.setp(options, "no_such_name", True))
+        self.assertTrue(any("no_such_name" in m for m in U.messages("Warning")))
+        self.assertFalse(C.setp(options, "other_missing", True, optional=True))
+        self.assertIsNone(C.getp(options, "other_missing"))
+
+    def test_setp_says_why_a_value_was_refused(self):
+        C = self.load("mb_ue_common")
+        options = U.FbxExportOption()
+        self.assertFalse(C.setp(options, "fbx_export_compatibility", U.FBXImportType.FBXIT_ANIMATION))
+        self.assertTrue(any("Failed to convert type 'FBXImportType'" in m for m in U.messages("Warning")))
+
+    def test_missing_enum_values_are_not_silent(self):
+        C = self.load("mb_ue_common")
+        self.assertIsNone(C.enum_value("InterchangeAnimationFrameAlignment", "SNAP_TO_CLOSEST"))
+        self.assertIsNone(C.enum_value("InterchangeFrameAlignment", "SNAP_SOMEWHERE"))
+        warnings = U.messages("Warning")
+        self.assertTrue(any("InterchangeAnimationFrameAlignment.SNAP_TO_CLOSEST not found" in m for m in warnings))
+        self.assertTrue(any("InterchangeFrameAlignment.SNAP_SOMEWHERE not found" in m for m in warnings))
+        self.assertIsNone(C.enum_value("NoSuchEnum", "X", optional=True))
+        self.assertEqual(len(U.messages("Warning")), 2)
+        self.assertIs(
+            C.enum_value("InterchangeFrameAlignment", "SNAP_TO_CLOSEST_FRAME_BOUNDARY", "SNAP_TO_CLOSEST"),
+            U.InterchangeFrameAlignment.SNAP_TO_CLOSEST,
+        )
+
+    def test_result_file_problems_are_warnings(self):
+        C = self.load("mb_ue_common")
+        C.set_result({"ok": True}, os.path.join(self.tmp, "missing", "dir", "r.json"))
+        self.assertEqual(json.loads(C.last_result_json()), {"ok": True})
+        self.assertTrue(any("Could not write result file" in m for m in U.messages("Warning")))
+
+    def test_save_and_list_failures_are_survivable(self):
+        C = self.load("mb_ue_common")
+        asset = U.add_asset("StaticMesh", "/Game/MB/SM_Crate")
+        with mock.patch.object(U.EditorAssetLibrary, "save_loaded_asset", side_effect=RuntimeError("locked")):
+            C.save_asset(asset)
+        self.assertTrue(any("Could not save SM_Crate" in m for m in U.messages("Warning")))
+        with mock.patch.object(U.EditorAssetLibrary, "rename_asset", return_value=False):
+            self.assertEqual(C.rename_asset(asset, "SM_Box"), "/Game/MB/SM_Crate")
+        self.assertEqual(C.rename_asset(asset, "SM_Crate"), "/Game/MB/SM_Crate")
+        with mock.patch.object(U, "load_asset", side_effect=RuntimeError("bad path")):
+            self.assertIsNone(C.load("/Game/MB/SM_Crate"))
+
+
+class ManifestContractTests(UnrealScriptCase):
+    """A real export from Blender, imported by the editor script."""
+
+    def setUp(self):
+        super().setUp()
+        self.scene = fixtures.fresh_scene(cm=True)
+
+    def test_static_skeletal_and_animation_export(self):
+        cube = fixtures.make_cube("Rock", size=40.0)
+        rig, _body = _animated_character()
+        prefs = fixtures.addon_module("prefs").get_prefs()
+        classify = fixtures.addon_module("core.classify")
+        export_fbx = fixtures.addon_module("core.export_fbx")
+        settings = fixtures.export_settings(self.tmp, generate_collision_mesh=True, collision_ratio=0.5)
+        groups = classify.build_groups([cube, rig], prefs, self.scene, destination=settings.destination_path)
+        groups += classify.build_anim_groups(
+            [rig], prefs, self.scene, source="ACTIVE_ACTION", destination=settings.destination_path
+        )
+        log = fixtures.addon_module("core.log").Report("test")
+        _done, manifest_path = export_fbx.export_groups(bpy.context, groups, settings, log)
+        self.assertTrue(log.ok, fixtures.report_text(log))
+        with open(manifest_path, encoding="utf-8") as fh:
+            items = {item["kind"]: item for item in json.load(fh)["items"]}
+        destination = items["STATIC_MESH"]["destination_path"]
+        U.plan_import(items["STATIC_MESH"]["path"], [("StaticMesh", "SM_Rock"), ("StaticMesh", "SM_Rock_COLL")])
+        U.plan_import(items["SKELETAL_MESH"]["path"], [("SkeletalMesh", "SKM_Hero"), ("Skeleton", "SKM_Hero_Skeleton")])
+        U.plan_import(items["ANIMATION"]["path"], [("AnimSequence", "A_Hero_Run")])
+        result = self.load("mb_ue_import").run(manifest_path)
+        self.assertTrue(result["ok"], result)
+        by_file = {r["file"]: r for r in result["items"]}
+        self.assertEqual(by_file["SM_Rock.fbx"]["complex_collision"], f"{destination}/SM_Rock_COLL")
+        self.assertEqual(by_file["A_Hero_Run.fbx"]["source_armature"], rig.name)
+        skeletal = self.pipeline().get_editor_property("common_skeletal_meshes_and_animations_properties")
+        self.assertIs(skeletal.get_editor_property("skeleton"), U.load_asset(f"{destination}/SKEL_Hero"))
+        self.assertEqual(
+            self.pipeline()
+            .get_editor_property("animation_pipeline")
+            .get_editor_property("custom_bone_animation_sample_rate"),
+            24,
+        )
+        self.assert_no_property_warnings()
+
+    def test_pulled_animation_settings_travel_with_the_push(self):
+        rig, _body = _animated_character()
+        rig.data.morenn.ue_skeleton_path = "/Game/Characters/SKEL_Hero"
+        pulled = {"enable_root_motion": True, "root_motion_root_lock": "ZERO", "retarget_source_asset": None}
+        rig.animation_data.action.morenn.ue_settings = json.dumps(pulled)
+        U.add_asset("Skeleton", "/Game/Characters/SKEL_Hero")
+        prefs = fixtures.addon_module("prefs").get_prefs()
+        settings = fixtures.export_settings(self.tmp)
+        groups = fixtures.addon_module("core.classify").build_anim_groups(
+            [rig], prefs, self.scene, destination=settings.destination_path
+        )
+        log = fixtures.addon_module("core.log").Report("test")
+        _done, manifest_path = fixtures.addon_module("core.export_fbx").export_groups(
+            bpy.context, groups, settings, log
+        )
+        with open(manifest_path, encoding="utf-8") as fh:
+            item = json.load(fh)["items"][0]
+        self.assertEqual(item["ue_settings"], pulled)
+        U.plan_import(item["path"], [("AnimSequence", "A_Hero_Run")])
+        result = self.load("mb_ue_import").run(manifest_path)
+        self.assertTrue(result["ok"], result)
+        anim = U.load_asset(f"{item['destination_path']}/A_Hero_Run")
+        self.assertTrue(anim.get_editor_property("enable_root_motion"))
+        self.assertIs(anim.get_editor_property("root_motion_root_lock"), U.RootMotionRootLock.ZERO)
+        self.assertEqual(result["items"][0]["warnings"], [])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -158,6 +158,26 @@ class AnimExportTests(unittest.TestCase):
             item = json.load(fh)["items"][0]
         self.assertEqual((item["frame_start"], item["frame_end"]), (5, 14))
 
+    def test_unreal_settings_of_a_pulled_action_go_into_the_manifest(self):
+        rig, _body = _animated_character()
+        run = rig.animation_data.action
+        pulled = {"enable_root_motion": True, "rate_scale": 0.5}
+        run.morenn.ue_settings = json.dumps(pulled)
+        for source in ("ACTIVE_ACTION", "SCENE_RANGE", "NLA_STRIPS"):
+            with self.subTest(source=source):
+                if source == "NLA_STRIPS":
+                    rig.animation_data.nla_tracks.new().strips.new("Jog", 1, run)
+                    rig.animation_data.action = None
+                _done, manifest_path, report = self._export_anim(rig, source=source)
+                self.assertTrue(report.ok, fixtures.report_text(report))
+                with open(manifest_path) as fh:
+                    self.assertEqual(json.load(fh)["items"][0]["ue_settings"], pulled)
+        run.morenn.ue_settings = "{not json"
+        _done, manifest_path, report = self._export_anim(rig, source="NLA_STRIPS")
+        with open(manifest_path) as fh:
+            self.assertNotIn("ue_settings", json.load(fh)["items"][0])
+        self.assertIn("'Run': stored Unreal settings are not valid JSON; not sent", fixtures.report_text(report))
+
     def test_all_actions_leaves_out_actions_of_other_rigs(self):
         rig, _body = _animated_character()
         other = fixtures.make_armature("Dog", bones=3, bone_length=20.0)

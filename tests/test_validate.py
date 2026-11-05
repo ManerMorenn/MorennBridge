@@ -310,6 +310,47 @@ class ExportTimeCodeTests(unittest.TestCase):
         self.assertIn("E012", fixtures.report_text(report))
         self.assertTrue(fixtures.no_temp_leftovers()[0])
 
+    def test_shape_keys_are_read_as_stored_without_other_modifiers(self):
+        """Fast path (no modifier besides Armature) and evaluated path (one key at a time) give the same keys."""
+        staging = fixtures.addon_module("core.staging")
+        cube = fixtures.make_cube("Face", size=2.0)
+        cube.shape_key_add(name="Basis")
+        smile = cube.shape_key_add(name="Smile")
+        for point in smile.data:
+            point.co.z += 0.5
+        with staging.Staging(bpy.context, fixtures.addon_module("core.log").Report()) as st:
+            _mesh, direct = st.evaluate_source_mesh(cube)
+            cube.modifiers.new("Nothing", "DISPLACE").strength = 0.0  # moves nothing, forces one evaluation per key
+            _mesh, evaluated = st.evaluate_source_mesh(cube)
+        self.assertEqual([s["name"] for s in direct], ["Basis", "Smile"])
+        self.assertEqual(len(direct[1]["co"]), len(evaluated[1]["co"]))
+        for a, b in zip(direct[1]["co"], evaluated[1]["co"]):
+            self.assertAlmostEqual(float(a), float(b), places=5)
+        self.assertTrue(fixtures.no_temp_leftovers()[0])
+
+    def test_shape_key_vertex_group_and_mute(self):
+        """A key's vertex group scales the exported shape; muted keys export their shape, like Blender's exporter."""
+        staging = fixtures.addon_module("core.staging")
+        cube = fixtures.make_cube("Face", size=2.0)
+        group = cube.vertex_groups.new(name="Quarter")
+        group.add(range(len(cube.data.vertices)), 0.25, "REPLACE")
+        cube.shape_key_add(name="Basis")
+        for name in ("Weighted", "Muted", "MutedWeighted"):
+            kb = cube.shape_key_add(name=name, from_mix=False)  # Blender 5 gives a new key the value 1.0
+            for point in kb.data:
+                point.co.z += 0.5
+        blocks = cube.data.shape_keys.key_blocks
+        blocks["Weighted"].vertex_group = blocks["MutedWeighted"].vertex_group = "Quarter"
+        blocks["Muted"].mute = blocks["MutedWeighted"].mute = True
+        base_z = [v.co.z for v in cube.data.vertices]
+        with staging.Staging(bpy.context, fixtures.addon_module("core.log").Report()) as st:
+            _mesh, specs = st.evaluate_source_mesh(cube)
+        offsets = {s["name"]: {round(float(z) - b, 4) for z, b in zip(s["co"][2::3], base_z)} for s in specs[1:]}
+        self.assertEqual(offsets, {"Weighted": {0.125}, "Muted": {0.5}, "MutedWeighted": {0.125}})
+        self.assertEqual([s["mute"] for s in specs[1:]], [False, True, True])
+        self.assertTrue(blocks["Muted"].mute and blocks["MutedWeighted"].mute)
+        self.assertTrue(fixtures.no_temp_leftovers()[0])
+
     def test_e020_combined_file_with_the_legacy_importer(self):
         cubes = [fixtures.make_cube("A"), fixtures.make_cube("B")]
         done, _manifest, report = fixtures.run_export(cubes, self.tmp, file_mode="COMBINED", ue_importer="LEGACY")
@@ -388,6 +429,9 @@ class FixerTests(unittest.TestCase):
         self.assertTrue(self.fix([rig], "E010")[0])
         self.assertIn("spine_001", rig.data.bones)
         self.assertEqual(body.vertex_groups[1].name, "spine_001")
+        rig.data.bones["bone_02"].name = "mixamorig:Head"  # Unreal drops FBX namespaces
+        self.assertTrue(self.fix([rig], "E010")[0])
+        self.assertIn("Head", rig.data.bones)
 
     def test_rename_bones_avoids_collisions(self):
         rig, _body = _rigged_character("Hero")

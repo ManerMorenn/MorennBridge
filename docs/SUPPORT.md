@@ -9,27 +9,40 @@
 | Blender 5.2 LTS | Supported |
 | Blender 4.4 and older | Not supported: the FBX importer and smoothing options the add-on relies on do not exist there |
 | Linux, Windows, macOS | Tested in CI |
-| Unreal Engine 5.8 | Target version, written against the engine source. Not yet confirmed in a live editor |
-| Other Unreal 5.x versions | Untested |
+| Unreal Engine 5.8 | Supported, verified with 5.8.4 on Windows (Interchange and legacy FBX importers) |
+| Other Unreal versions | Not supported |
 
 The test suite runs on every supported Blender version, and on Blender's daily builds twice a week.
 
-Unreal Link, the push and pull feature, is experimental for the same reason: it has only been tested against a fake
-editor that speaks the same protocol.
+Unreal 5.8.4 was checked in the editor: imports of every kind of export (static meshes with collision, sockets and
+LODs, skeletal meshes with LODs and morph targets, animations at 24 and 30 fps, vertex colours), Unreal Link push and
+pull, and round trips of Unreal's mannequins, a MetaHuman, a Mixamo character and a character from Fab. The exported
+files also open without errors in the Autodesk FBX SDK. Files made in Maya or 3ds Max have not been tested.
 
 ## Known limitations
 
 - Collection instances export their meshes only. Curves and other objects inside the collection are ignored (`W025`).
 - Hair curves, point clouds, volumes and Grease Pencil objects cannot be exported as meshes. They are listed in the
   Log.
-- Shape key animation is not exported. Shape keys themselves are.
+- Shape key animation is not exported. Shape keys themselves are, muted ones included, with their vertex group
+  applied to the shape.
+- Blender keeps 63 bytes of a name. Shape keys imported with longer names are shortened in Blender, and the export
+  writes their full names again. A shape key you rename gets the new name.
 - Importing an animation creates a new rig. It cannot be applied to an existing one yet.
 - Motion of the armature object is never exported (`E002`).
 - ASCII FBX files import, but their LOD groups and bone axis markers are not read. Binary is the better choice.
 - Convert Scene does not rescale particle sizes, driver expressions or plain numbers in Geometry Nodes inputs. It
   warns about them. Inputs declared as distances are scaled.
 - Convert Bone Axes clears the *Connected* flag, because tails move. Euler-keyed bones become quaternion bones.
-- Push to Unreal keeps Blender busy until Unreal has finished importing.
+- Pull: Unreal writes an animation with the bones of its skeleton's preview mesh only. Bones that only the
+  skeleton has (correctives and attachment bones of a shared skeleton) are not in the file, so an animation pushed
+  back plays them in their reference pose.
+- Animation settings that exist only on the Unreal asset (root motion, root lock, retarget source, rate scale,
+  looping, additive settings) are not part of FBX. Pull keeps them on the Blender action and a push of that action
+  sets them again, as they were when pulled. Animations made in Blender get Unreal's defaults.
+- Unreal's FBX export names materials after the material assets, not after the slots. Pull keeps each mesh's slot
+  names and materials; a push names the FBX materials after the slots and gives each slot its material again,
+  deleting the copies the import made for them. Materials made in Blender become slots of the same name.
 
 ## FAQ
 

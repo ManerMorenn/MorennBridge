@@ -1,19 +1,29 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Export Unreal assets (selected in the Content Browser, or given by path) to FBX for MorennBridge.
 
 Run inside UE:  mb_ue_export.py "<out_dir>" ["/Game/Path/Asset" ...]
 Writes "<out_dir>/pull.result.json".
 """
 
+import importlib.util
 import os
 import sys
 
-_HERE = os.path.dirname(os.path.abspath(__file__ if "__file__" in globals() else sys.argv[0]))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-
-import mb_ue_common as C
 import unreal
+
+_HERE = os.path.dirname(os.path.abspath(__file__ if "__file__" in globals() else sys.argv[0]))
+
+
+def _load_common():
+    """mb_ue_common from this folder, loaded again on each run: the editor keeps the modules of earlier runs."""
+    spec = importlib.util.spec_from_file_location("mb_ue_common", os.path.join(_HERE, "mb_ue_common.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["mb_ue_common"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+C = _load_common()
 
 EXPORTERS = {
     "StaticMesh": ("StaticMeshExporterFBX", "STATIC_MESH"),
@@ -65,12 +75,15 @@ def export_asset(asset, out_dir):
         "success": bool(ok) and os.path.exists(filename),
         "errors": [str(e) for e in task.get_editor_property("errors")],
     }
+    if cls in ("StaticMesh", "SkeletalMesh"):  # the FBX names materials after the material assets, not the slots
+        item["materials"] = C.material_slots(asset)
     if cls == "SkeletalMesh":
         skel = C.getp(asset, "skeleton")
         item["skeleton"] = C.asset_path(skel) if skel is not None else None
     elif cls == "AnimSequence":
         skel = C.getp(asset, "skeleton")
         item["skeleton"] = C.asset_path(skel) if skel is not None else None
+        item["settings"] = C.read_settings(asset, C.ANIM_SETTINGS)
     return item
 
 

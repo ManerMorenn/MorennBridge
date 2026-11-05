@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import math
 import os
 import unittest
 
 import bpy
+from mathutils import Matrix
 
 from tests import fixtures
+from tests.test_export_anim import _animated_character
 from tests.test_export_skeletal import _rigged_character
 
 
@@ -100,6 +103,136 @@ class ImportUETests(unittest.TestCase):
         mesh = [o for o in res.objects if o.type == "MESH"][0]
         got_verts = sorted((mesh.matrix_world @ v.co).to_tuple(3) for v in mesh.data.vertices)
         self.assertEqual(got_verts, sorted(v.to_tuple(3) for v in verts))
+
+    def test_take_end_wins_over_a_trailing_key(self):
+        """Unreal writes one key past the end of an animation; the take's time span says where it ends."""
+        rig, _body = _animated_character()
+        settings = fixtures.export_settings(self.tmp)
+        groups = fixtures.addon_module("core.classify").build_anim_groups(
+            [rig], self.prefs, bpy.context.scene, source="ACTIVE_ACTION", destination=settings.destination_path
+        )
+        done, _ = fixtures.addon_module("core.export_fbx").export_groups(bpy.context, groups, settings, self.Report())
+        tree, insp = fixtures.addon_module("fbxpatch.tree"), fixtures.addon_module("fbxpatch.inspect")
+        root, version = tree.load(done[0].path)
+        fixtures.addon_module("fbxpatch.patches").rename_anim_stack(root, "Unreal Take")
+        stack = insp.anim_stacks(root)[0]
+        ticks_per_frame = self.import_fbx.FBX_TICKS_PER_SECOND / bpy.context.scene.render.fps
+        start = insp.prop_values(stack, b"LocalStart")[0] / ticks_per_frame
+        stop = next(p for p in stack.find(b"Properties70").elems if p.props[0] == b"LocalStop")
+        last_key = round(stop.props[4] / ticks_per_frame)
+        stop.props[4] = round((last_key - 1) * ticks_per_frame)
+        path = os.path.join(self.tmp, "A_Run.fbx")
+        tree.save(path, root, version)
+        fixtures.fresh_scene(cm=True)
+        report = self.Report()
+        action = self.import_fbx.import_file(bpy.context, path, self.prefs, report).actions[0]
+        self.assertEqual(action.name, "A_Run")
+        self.assertTrue(action.use_frame_range)
+        self.assertEqual((action.frame_start, action.frame_end), (round(start, 3), last_key - 1))
+        self.assertIn(f"to {last_key - 1:g} from the file", fixtures.report_text(report))
+        fixtures.fresh_scene(cm=True)
+        self.assertFalse(
+            self.import_fbx.import_file(bpy.context, done[0].path, self.prefs, report).actions[0].use_frame_range
+        )
+
+    def test_rest_rotations_snap_to_the_bind_matrices(self):
+        """Within the tolerance a bone takes the file's exact rotation; poses and keys of its children do not move."""
+        bones = fixtures.addon_module("core.bones")
+        rig, _body = _animated_character()
+        scene = bpy.context.scene
+        with bpy.context.temp_override(**fixtures.addon_module("compat").window_override()):
+            bpy.context.view_layer.objects.active = rig
+            bpy.ops.object.mode_set(mode="EDIT")
+            for eb in rig.data.edit_bones:  # like Blender's FBX importer, which connects no bone
+                eb.use_connect = False
+            bpy.ops.object.mode_set(mode="OBJECT")
+
+        def posed(frame):
+            scene.frame_set(frame)
+            bpy.context.view_layer.update()
+            return {pb.name: pb.matrix.copy() for pb in rig.pose.bones}
+
+        before = {frame: posed(frame) for frame in (1, 12, 24)}
+        take = rig.animation_data.action
+        other_take = take.copy()  # a second take of the same file, not assigned
+        binds = {}
+        for bone in rig.data.bones:
+            m = rig.matrix_world @ bone.matrix_local
+            turn = {"bone_01": 0.2, "bone_02": 5.0}.get(bone.name, 0.0)  # bone_02 is beyond the tolerance
+            m = m @ Matrix.Rotation(math.radians(turn), 4, "Y")
+            binds[bone.name] = tuple(m[r][c] for c in range(4) for r in range(4))
+        with bpy.context.temp_override(**fixtures.addon_module("compat").window_override()):
+            changed, worst = bones.snap_rest_to_bind(bpy.context, rig, binds, [take, other_take])
+        self.assertEqual(changed, 1)
+        self.assertAlmostEqual(worst, 0.2, places=3)
+        want = (rig.matrix_world @ bones._fbx_matrix(binds["bone_01"])).to_3x3().normalized()
+        got = rig.data.bones["bone_01"].matrix_local.to_3x3().normalized()
+        self.assertLess(math.degrees(bones.rotation_angle(want.transposed() @ got)), 1e-3)
+        for action in (take, other_take):
+            rig.animation_data.action = action
+            for frame, matrices in before.items():
+                after = posed(frame)
+                for name, m in matrices.items():
+                    for i in range(4):
+                        for j in range(4):
+                            msg = f"{action.name}: {name} @ {frame}"
+                            self.assertAlmostEqual(after[name][i][j], m[i][j], places=3, msg=msg)
+
+    def test_rest_snap_leaves_bones_with_a_connected_child(self):
+        """Turning a bone would move its connected child's head, which follows the tail."""
+        bones = fixtures.addon_module("core.bones")
+        rig, _body = _rigged_character("Hero", shape_key=False)
+        with bpy.context.temp_override(**fixtures.addon_module("compat").window_override()):
+            bpy.context.view_layer.objects.active = rig
+            bpy.ops.object.mode_set(mode="EDIT")
+            child = rig.data.edit_bones["bone_02"]
+            child.head = child.parent.tail
+            child.use_connect = True
+            bpy.ops.object.mode_set(mode="OBJECT")
+        rest = {b.name: b.matrix_local.copy() for b in rig.data.bones}
+        binds = {}
+        for bone in rig.data.bones:
+            turn = {"bone_01": 0.2, "bone_02": 0.3}.get(bone.name, 0.0)
+            m = rig.matrix_world @ bone.matrix_local @ Matrix.Rotation(math.radians(turn), 4, "X")
+            binds[bone.name] = tuple(m[r][c] for c in range(4) for r in range(4))
+        with bpy.context.temp_override(**fixtures.addon_module("compat").window_override()):
+            changed, _worst = bones.snap_rest_to_bind(bpy.context, rig, binds)
+        self.assertEqual(changed, 1)  # bone_02 only: bone_01 holds the connected bone_02
+        after = rig.data.bones["bone_01"].matrix_local
+        self.assertLess(
+            math.degrees(bones.rotation_angle(rest["bone_01"].to_3x3().transposed() @ after.to_3x3())), 1e-4
+        )
+        self.assertLess((rig.data.bones["bone_02"].head_local - rest["bone_02"].translation).length, 1e-4)
+
+    def test_skeletal_lods_from_unreal_become_lod_objects(self):
+        """Unreal writes a skeletal mesh's LODs as skinned meshes under one LOD group, last LOD first in the scene."""
+        rig, body = _rigged_character("Hero", shape_key=False)
+        lods = {}
+        for index in (2, 0, 1):
+            mesh = body if index == 0 else body.copy()
+            if index:
+                mesh.data = body.data.copy()
+                fixtures.link(mesh)
+            mesh.name = f"SKM_Hero_LOD{index}"
+            lods[index] = mesh
+        info = self.import_fbx.ImportInfo(
+            lod_groups=[("SKM_Hero_LodGroup", [f"SKM_Hero_LOD{i}" for i in range(3)])],
+            lod_levels={f"SKM_Hero_LOD{i}": i for i in range(3)},
+        )
+        result = self.import_fbx.ImportResult("SKM_Hero.fbx", info, objects=[rig, *lods.values()], armatures=[rig])
+        result.meshes = [lods[2], lods[0], lods[1]]
+        report = self.Report()
+        self.import_fbx._tidy(bpy.context, result, "SKM_Hero", report)
+        self.assertEqual(lods[0].name, "SKM_Hero_Mesh")
+        for index in (1, 2):
+            self.assertEqual(lods[index].name, f"SKM_Hero_LOD{index}")
+            self.assertEqual((lods[index].morenn.role, lods[index].morenn.lod_index), ("LOD", index))
+            self.assertEqual(lods[index].morenn.lod_of, lods[0])
+        self.assertIn("LOD1/2 kept as LOD objects", fixtures.report_text(report))
+        done, _, export_report = fixtures.run_export([rig], self.tmp)
+        self.assertTrue(export_report.ok, fixtures.report_text(export_report))
+        groups = fixtures.addon_module("fbxpatch.patches").lod_groups(fixtures.fbx_load(done[0].path)[0])
+        self.assertEqual(groups, [("SKM_Hero_LodGroup", ["SKM_Hero_LOD0", "SKM_Hero_LOD1", "SKM_Hero_LOD2"])])
 
     def test_metre_scene_rescales(self):
         path, rig, body = make_ue_style_file(self.tmp)

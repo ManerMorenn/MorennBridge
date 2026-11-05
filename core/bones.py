@@ -12,7 +12,7 @@ import re
 
 import bpy
 import numpy as np
-from mathutils import Euler, Matrix, Vector
+from mathutils import Euler, Matrix, Quaternion, Vector
 
 from .. import compat
 
@@ -213,6 +213,150 @@ def convert_rest_axes(context, arm_obj, K, extra_override=None):
             eb.matrix = eb.matrix @ k
             eb.length = length
         bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def _depth(bone):
+    d = 0
+    while bone.parent is not None:
+        bone = bone.parent
+        d += 1
+    return d
+
+
+def _fbx_matrix(values):
+    """16 floats, column-major (FBX) -> Matrix."""
+    return Matrix([[values[c * 4 + r] for c in range(4)] for r in range(4)])
+
+
+def rotation_angle(m3):
+    """Angle (radians) of a rotation matrix; ``2·atan2(|xyz|, |w|)`` stays exact for small angles in single precision."""
+    q = m3.to_quaternion()
+    return 2.0 * math.atan2(math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z), abs(q.w))
+
+
+def snap_rest_to_bind(context, arm_obj, bind_matrices, actions=(), tolerance_deg=0.5):
+    """Give bones the exact rest rotation of the file's bind matrices, when they are within ``tolerance_deg`` of it.
+
+    Blender's FBX importer gives a bone whose children sit at its head (twist bones) a length of 0.01: head and tail
+    that close in single precision cannot hold the direction, which ends up a fraction of a degree off (0.14° of roll
+    on some twist bones of Epic's mannequin). Short bones are first lengthened along their direction (the length
+    pass of the import sets the final lengths), then the parent-relative rotations of the file are applied top-down,
+    so where the importer put the armature does not matter. A larger difference means the importer chose another rest
+    pose; that is left alone, as are bones with a connected child (its head follows the tail). Poses, the armature's
+    action and ``actions`` (the other takes of the file) keep their result: each bone whose parent-relative rest
+    changed gets ``E @ basis``. Returns ``(bones changed, largest change in degrees)``.
+    """
+    tolerance = math.radians(tolerance_deg)
+    binds = {name: _fbx_matrix(values).to_3x3().normalized() for name, values in bind_matrices.items()}
+    changed, worst = 0, 0.0
+    context.view_layer.objects.active = arm_obj
+    with context.temp_override(**_edit_override(context, arm_obj)):
+        bpy.ops.object.mode_set(mode="EDIT")
+        connected = {eb.name for eb in arm_obj.data.edit_bones if any(c.use_connect for c in eb.children)}
+        for eb in arm_obj.data.edit_bones:
+            if eb.name not in connected:  # a connected child's head follows the tail
+                eb.length = max(eb.length, 0.01 * (eb.head.length + 1.0))
+        before = {eb.name: eb.matrix.copy() for eb in arm_obj.data.edit_bones}
+        parents = {eb.name: eb.parent.name if eb.parent else None for eb in arm_obj.data.edit_bones}
+        rest = {}
+        for eb in sorted(arm_obj.data.edit_bones, key=_depth):
+            current = eb.matrix.to_3x3().normalized()
+            rest[eb.name] = current
+            parent = eb.parent
+            if parent is None or eb.name in connected or eb.name not in binds or parent.name not in binds:
+                continue
+            target = rest[parent.name] @ binds[parent.name].transposed() @ binds[eb.name]
+            delta = rotation_angle(current.transposed() @ target)
+            if delta <= 1e-6 or delta > tolerance:  # below 1e-6 rad: single-precision noise
+                continue
+            eb.matrix = Matrix.Translation(eb.head) @ target.to_4x4()
+            rest[eb.name] = target
+            changed += 1
+            worst = max(worst, delta)
+        after = {eb.name: eb.matrix.copy() for eb in arm_obj.data.edit_bones}
+        bpy.ops.object.mode_set(mode="OBJECT")
+    if changed:
+        _keep_poses(arm_obj, _rest_changes(before, after, parents), actions)
+    return changed, math.degrees(worst)
+
+
+def _rest_changes(before, after, parents):
+    """``{bone: E}`` with ``E = L'⁻¹ L`` for every bone whose rest relative to its parent (``L``) changed."""
+    out = {}
+    for name, parent in parents.items():
+        old = before[parent].inverted() @ before[name] if parent else before[name]
+        new = after[parent].inverted() @ after[name] if parent else after[name]
+        e = new.inverted() @ old
+        if rotation_angle(e.to_3x3()) > 1e-7 or e.translation.length > 1e-6:
+            out[name] = e
+    return out
+
+
+def _keep_poses(arm_obj, corrections, actions=()):
+    """``basis = E @ basis`` on the pose and on every key of ``actions`` and of the armature's action, so poses do
+    not move."""
+    if arm_obj.pose is not None:
+        for name, e in corrections.items():
+            pb = arm_obj.pose.bones.get(name)
+            if pb is not None:
+                pb.matrix_basis = e @ pb.matrix_basis
+    ad = arm_obj.animation_data
+    todo = list(dict.fromkeys([*actions, *([ad.action] if ad is not None and ad.action is not None else [])]))
+    for action in todo:
+        groups, bags = _group_bone_fcurves(action)
+        channels = {}
+        for (slot_key, bone, prop), fcs in groups.items():
+            if bone in corrections:
+                channels.setdefault((slot_key, bone), {})[prop] = fcs
+        for (slot_key, bone), props in channels.items():
+            _premultiply_keys(bags[slot_key], bone, props, corrections[bone], arm_obj.pose.bones.get(bone))
+
+
+def _premultiply_keys(slot_bag, bone, props, e, pose_bone):
+    """Rewrite the location and rotation keys of ``bone`` as ``E @ basis`` (quaternions), on every keyed and whole
+    frame, so the result does not depend on the original interpolation."""
+    _slot, bag = slot_bag
+    keyed = [fc for fcs in props.values() for fc in fcs.values()]
+    frames = {float(k.co.x) for fc in keyed for k in fc.keyframe_points}
+    if not frames:
+        return
+    frames = sorted(frames | {float(f) for f in range(math.ceil(min(frames)), math.floor(max(frames)) + 1)})
+    order = pose_bone.rotation_mode if pose_bone is not None and len(pose_bone.rotation_mode) == 3 else "XYZ"
+
+    def value(prop, index, frame, default):
+        fc = props.get(prop, {}).get(index)
+        return fc.evaluate(frame) if fc is not None else default
+
+    locations, quats = [], []
+    for f in frames:
+        loc = Vector([value("location", i, f, 0.0) for i in range(3)])
+        if "rotation_quaternion" in props:  # interpolated keys are not unit length; poses normalise them
+            rot = Quaternion(
+                [value("rotation_quaternion", i, f, 1.0 if i == 0 else 0.0) for i in range(4)]
+            ).normalized()
+        elif "rotation_euler" in props:
+            rot = Euler([value("rotation_euler", i, f, 0.0) for i in range(3)], order).to_quaternion()
+        else:
+            rot = Quaternion()
+        new_loc, new_rot, _scale = (e @ Matrix.LocRotScale(loc, rot, None)).decompose()
+        if quats and new_rot.dot(quats[-1]) < 0.0:
+            new_rot.negate()
+        locations.append(new_loc)
+        quats.append(new_rot)
+    for prop in ("location", "rotation_quaternion", "rotation_euler"):
+        for fc in props.get(prop, {}).values():
+            bag.fcurves.remove(fc)
+    for path, values in (("location", locations), ("rotation_quaternion", quats)):
+        for comp in range(len(values[0])):
+            fc = compat.new_fcurve(bag, f'pose.bones["{bone}"].{path}', index=comp, group=bone)
+            fc.keyframe_points.add(len(frames))
+            co = np.array([(f, v[comp]) for f, v in zip(frames, values)], dtype=np.float64)
+            fc.keyframe_points.foreach_set("co", co.ravel())
+            for k in fc.keyframe_points:
+                k.interpolation = "LINEAR"
+            fc.update()
+    if pose_bone is not None:
+        pose_bone.rotation_mode = "QUATERNION"
 
 
 def conjugate_pose(arm_obj, K):

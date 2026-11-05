@@ -4,6 +4,7 @@ import os
 import unittest
 
 from tests import fixtures
+from tests.test_export_skeletal import _rigged_character
 
 
 def _tree_equal(a, b, path="root"):
@@ -56,6 +57,70 @@ class FbxPatchTests(unittest.TestCase):
         res = self.patches.rename_nodes(root, {"SM_Crate": "SM_Box"})
         self.assertTrue(res.changed)
         self.assertIn("SM_Box", fixtures.fbx_models(root, b"Mesh"))
+
+    def test_a_skin_keeps_one_cluster_when_none_weights_a_vertex(self):
+        rig, _body = _rigged_character("Hero", shape_key=False)
+        done, _, report = fixtures.run_export([rig], self.tmp)
+        self.assertTrue(report.ok, [str(e) for e in report.entries])
+        root, _version = self.tree.load(done[0].path)
+        clusters = self.I.find_objects(root, b"Deformer", subclass=b"Cluster")
+        for cluster in clusters:
+            for elem in cluster.find_all(b"Indexes") + cluster.find_all(b"Weights"):
+                cluster.remove(elem)
+        result = self.patches.drop_empty_clusters(root)
+        kept = self.I.find_objects(root, b"Deformer", subclass=b"Cluster")
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(result.notes, ["2 skin cluster(s) that weight no vertex left out"])
+        gone = {self.I.object_id(c) for c in clusters} - {self.I.object_id(kept[0])}
+        self.assertFalse([c for c in self.I.connections(root) if c[1] in gone or c[2] in gone])
+        self.assertFalse(self.patches.drop_empty_clusters(root))
+
+    def _ball(self, smooth=True, shape_key=True):
+        ball = fixtures.make_sphere("Ball", radius=50.0, segments=12, rings=8)
+        if smooth:
+            ball.data.shade_smooth()
+        if shape_key:
+            ball.shape_key_add(name="Basis", from_mix=False)
+            for point in ball.shape_key_add(name="Grow", from_mix=False).data:
+                point.co *= 1.2
+        return ball
+
+    def _normal_layer(self, path):
+        root, _version = self.tree.load(path)
+        model = fixtures.fbx_models(root, b"Mesh")["SM_Ball"]
+        return fixtures.fbx_geometry_for_model(root, model).find(b"LayerElementNormal")
+
+    def test_smooth_mesh_with_shape_keys_gets_normals_per_vertex(self):
+        ball = self._ball()
+        done, _, report = fixtures.run_export([ball], self.tmp)
+        self.assertTrue(report.ok, [str(e) for e in report.entries])
+        layer = self._normal_layer(done[0].path)
+        self.assertEqual(layer.find(b"MappingInformationType").props[0], b"ByVertice")
+        self.assertEqual(layer.find(b"ReferenceInformationType").props[0], b"Direct")
+        self.assertIsNone(layer.find(b"NormalsIndex"))
+        normals = list(layer.find(b"Normals").props[0])
+        self.assertEqual(len(normals), 3 * len(ball.data.vertices))
+        for vertex in ball.data.vertices:
+            fixtures.assert_vec_close(self, normals[3 * vertex.index : 3 * vertex.index + 3], vertex.normal, places=3)
+        self.assertIn("normals stored per vertex on 1 mesh(es) with shape keys", fixtures.report_text(report))
+
+    def test_normals_stay_per_corner_without_shape_keys_or_with_split_normals(self):
+        for smooth, shape_key in ((True, False), (False, True)):
+            with self.subTest(smooth=smooth, shape_key=shape_key):
+                fixtures.fresh_scene(cm=True)
+                done, _, report = fixtures.run_export([self._ball(smooth, shape_key)], self.tmp)
+                self.assertTrue(report.ok, [str(e) for e in report.entries])
+                layer = self._normal_layer(done[0].path)
+                self.assertEqual(layer.find(b"MappingInformationType").props[0], b"ByPolygonVertex")
+                self.assertNotIn("normals stored per vertex", fixtures.report_text(report))
+
+    def test_static_files_keep_shape_keys_that_move_nothing(self):
+        ball = self._ball()
+        ball.shape_key_add(name="Still", from_mix=False)
+        done, _, report = fixtures.run_export([ball], self.tmp)
+        self.assertTrue(report.ok, [str(e) for e in report.entries])
+        root, _version = self.tree.load(done[0].path)
+        self.assertEqual(self.patches.blend_shape_names(root), {"SM_Ball": ["Grow", "Still"]})
 
     def test_retype_root_bones(self):
         rig = fixtures.make_armature("Rig", bones=2, bone_length=10.0)

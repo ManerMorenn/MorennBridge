@@ -14,25 +14,26 @@ manifest records where MorennBridge expects the asset.
 ## 2. Push to Unreal: UE 5.8 project settings for remote execution
 1. **Plugins**: enable *Python Editor Script Plugin* (it is loaded anyway by Niagara / RigVM) and
    *Editor Scripting Utilities*. Restart the editor.
-2. **Edit → Project Settings → Plugins → Python**:
-    - *Enable Remote Execution*: **on**
+2. **Edit → Project Settings → Plugins → Python**, section *Python Remote Execution*: *Enable Remote Execution?*
+   **on**. It is a project setting, not one of the Editor Preferences where Python's *Developer Mode* is. The
+   advanced settings of the section keep their defaults, which match the add-on:
     - *Multicast Group Endpoint*: `239.0.0.1:6766`
-    - *Multicast Bind Address*: `0.0.0.0` on macOS/Linux (`127.0.0.1` sometimes does not receive multicast there);
-      `127.0.0.1` is fine on Windows
-    - *Multicast TTL*: `0` (same machine only)
+    - *Multicast Bind Address*: `127.0.0.1`. On macOS/Linux this address sometimes does not receive multicast: set
+      `0.0.0.0` when *Find Unreal* finds nothing
+    - *Multicast Time-To-Live*: `0` (same machine only)
 
-    Equivalent `Config/DefaultEngine.ini` block:
+    The editor writes the setting to `Config/DefaultEngine.ini`:
 
     ```ini
     [/Script/PythonScriptPlugin.PythonScriptPluginSettings]
     bRemoteExecution=True
-    RemoteExecutionMulticastGroupEndpoint=239.0.0.1:6766
-    RemoteExecutionMulticastBindAddress=0.0.0.0
-    RemoteExecutionMulticastTtl=0
     ```
 
 3. **Firewall**: allow the editor to accept local connections (the bridge only uses loopback traffic).
-4. **Interchange**: Project Settings → Interchange → FBX translator: *Force Front X Axis* **off** (the bridge verifies it).
+4. **Interchange FBX translator**: these settings belong to each user and are not in Project Settings. The
+   *Translator Settings* button of the Interchange import dialog opens them; keep *Force Front X Axis* off for
+   manual imports. A push imports with *Force Front X Axis* and the experimental uFBX translator off, then puts your
+   settings back, and the Log says so.
 5. **Blender**: Preferences → System → *Allow Online Access* must be enabled, otherwise the add-on refuses to open sockets.
 6. In Blender's *Unreal Link* panel click *Find Unreal*; the project name appears in the list. Export with
    *Push to Unreal after export* enabled, or push the last export manually.
@@ -41,13 +42,14 @@ While remote execution is on, any program on this machine can run Python in the 
 turn the setting off on shared machines.
 
 ## 3. Legacy FBX importer (optional)
-UE 5.8 imports FBX through Interchange. To use the legacy importer instead, add to `DefaultEngine.ini`:
+UE 5.8 imports FBX through Interchange. To target the legacy importer, set *UE importer = Legacy* in the
+MorennBridge preferences (LOD groups are then written as real FBX LodGroup nodes, several meshes per file are not
+supported, generated collision meshes go to separate files). A push then uses the legacy importer by itself. For
+files you drag into the Content Browser, also add to `DefaultEngine.ini`:
 ```ini
 [ConsoleVariables]
 Interchange.FeatureFlags.Import.FBX=0
 ```
-and set *UE importer = Legacy* in the MorennBridge preferences (LOD groups are then written as real FBX
-LodGroup nodes, several meshes per file are not supported, generated collision meshes go to separate files).
 
 ## 4. Troubleshooting
 - **Extra `Armature` root bone**: the file was exported without the post-pass (or with *Strip armature null node*

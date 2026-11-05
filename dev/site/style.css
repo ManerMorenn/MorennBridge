@@ -170,7 +170,7 @@ p > img:only-child { margin: 1.75rem auto; }
   justify-content: space-between; font-size: .75rem; color: rgba(200, 209, 225, .7);
 }
 .footer p { margin: 0; color: inherit; }
-.footer-links { display: flex; gap: 1.5rem; }
+.footer-links { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; }
 .footer-links a { color: inherit; }
 .footer-links a:hover { color: var(--text); }
 .copyright { font-family: var(--mono); text-transform: uppercase; letter-spacing: .2em; font-size: .62rem; opacity: .6; }

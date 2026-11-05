@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Shared helpers for the scripts MorennBridge runs inside the Unreal Editor's Python."""
 
 import json
@@ -39,14 +39,15 @@ def last_result_json():
 
 def setp(obj, name, value, alternatives=(), optional=False):
     """``obj.set_editor_property`` with fallbacks; returns True when a property was set."""
+    error = None
     for candidate in (name, *alternatives):
         try:
             obj.set_editor_property(candidate, value)
             return True
-        except Exception:
-            continue
+        except Exception as exc:
+            error = exc
     if not optional:
-        warn(f"Property '{name}' not found on {type(obj).__name__}; left at its default")
+        warn(f"Could not set '{name}' on {type(obj).__name__}, left at its default: {error}")
     return False
 
 
@@ -57,15 +58,112 @@ def getp(obj, name, default=None):
         return default
 
 
-def enum_value(enum_name, *member_names):
+def enum_value(enum_name, *member_names, optional=False):
+    """First existing member of ``unreal.<enum_name>``; warns (unless optional) when there is none."""
     enum_cls = getattr(unreal, enum_name, None)
-    if enum_cls is None:
-        return None
-    for member in member_names:
+    for member in member_names if enum_cls is not None else ():
         value = getattr(enum_cls, member, None)
         if value is not None:
             return value
+    if not optional:
+        warn(f"Enum value {enum_name}.{'/'.join(member_names)} not found; setting left at its default")
     return None
+
+
+# AnimSequence settings FBX cannot carry: Pull records them, Push sets them again. Kind: value, name, asset or enum.
+ANIM_SETTINGS = (
+    ("enable_root_motion", "value"),
+    ("root_motion_root_lock", "RootMotionRootLock"),
+    ("force_root_lock", "value"),
+    ("use_normalized_root_motion_scale", "value"),
+    ("retarget_source", "name"),
+    ("retarget_source_asset", "asset"),
+    ("rate_scale", "value"),
+    ("loop", "value"),
+    ("interpolation", "AnimInterpolationType"),
+    ("additive_anim_type", "AdditiveAnimationType"),
+    ("ref_pose_type", "AdditiveBasePoseType"),
+    ("ref_pose_seq", "asset"),
+    ("ref_frame_index", "value"),
+)
+
+
+def read_settings(asset, spec):
+    """JSON-ready values of the ``spec`` properties of ``asset`` (properties it does not have are left out)."""
+    out = {}
+    for name, kind in spec:
+        try:
+            value = asset.get_editor_property(name)
+        except Exception:
+            continue
+        if kind == "asset":
+            out[name] = asset_path(value) if value is not None else None
+        elif kind == "name":
+            out[name] = str(value)
+        elif kind == "value":
+            out[name] = value
+        else:
+            out[name] = value.name
+    return out
+
+
+def apply_settings(asset, values, spec):
+    """Set what ``read_settings`` recorded; returns ``(applied, failed)`` property names."""
+    applied, failed = [], []
+    for name, kind in spec:
+        if name not in values:
+            continue
+        value = values[name]
+        if kind == "asset" and value:
+            value = load(value)
+        elif kind not in ("asset", "name", "value"):
+            value = enum_value(kind, value, optional=True) if value else None
+        missing = value is None and (kind not in ("asset", "name", "value") or values[name])
+        if missing or not setp(asset, name, value, optional=True):
+            failed.append(name)
+        else:
+            applied.append(name)
+    return applied, failed
+
+
+def _slots_property(mesh):
+    return "materials" if mesh.get_class().get_name() == "SkeletalMesh" else "static_materials"
+
+
+def material_slots(mesh):
+    """``[{"slot": name, "material": path or None}]`` of a static or skeletal mesh, in slot order."""
+    out = []
+    for slot in getp(mesh, _slots_property(mesh)) or []:
+        material = getp(slot, "material_interface")
+        out.append(
+            {"slot": str(getp(slot, "material_slot_name")), "material": asset_path(material) if material else None}
+        )
+    return out
+
+
+def set_material_slots(mesh, wanted):
+    """Give the slots named in ``wanted`` (slot name -> material path) that material.
+
+    Returns ``(slots set, material paths not found, paths of the materials they replaced)``.
+    """
+    slots = list(getp(mesh, _slots_property(mesh)) or [])
+    done, missing, replaced = [], [], []
+    for slot in slots:
+        name = str(getp(slot, "material_slot_name"))
+        if not wanted.get(name):
+            continue
+        material = load(wanted[name])
+        if material is None:
+            missing.append(wanted[name])
+            continue
+        current = getp(slot, "material_interface")
+        if current is not None and asset_path(current) != wanted[name]:
+            replaced.append(asset_path(current))
+        setp(slot, "material_interface", material)
+        done.append(name)
+    if done:
+        setp(mesh, _slots_property(mesh), slots)
+    return done, missing, replaced
 
 
 def ensure_directory(content_path):
@@ -100,13 +198,6 @@ def save_asset(asset):
         unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False)
     except Exception as exc:
         warn(f"Could not save {asset.get_name()}: {exc}")
-
-
-def list_assets(folder, recursive=False):
-    try:
-        return list(unreal.EditorAssetLibrary.list_assets(folder, recursive=recursive, include_folder=False))
-    except Exception:
-        return []
 
 
 def load(path):

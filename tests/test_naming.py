@@ -36,6 +36,8 @@ class NamingTests(unittest.TestCase):
         self.assertEqual(self.naming.sanitize_ue_name("spine.001"), "spine_001")
         self.assertEqual(self.naming.sanitize_ue_name("my bone+1"), "my-bone_1")
         self.assertEqual(self.naming.sanitize_ue_name(""), "Null")
+        self.assertEqual(self.naming.sanitize_ue_name("mixamorig:Hips"), "Hips")  # both importers drop the namespace
+        self.assertEqual(self.naming.sanitize_ue_name("rig:arm:hand.L"), "hand_L")
         self.assertTrue(self.naming.is_ue_safe("spine_01"))
         self.assertFalse(self.naming.is_ue_safe("spine.01"))
 

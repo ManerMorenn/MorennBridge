@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Import FBX files coming from Unreal (or MorennBridge) into a clean Blender setup."""
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -11,7 +12,7 @@ from .. import compat
 from ..fbxpatch import ascii as fbx_ascii
 from ..fbxpatch import inspect as I
 from ..fbxpatch import patches, tree
-from . import bones, naming, units
+from . import bones, classify, naming, units
 from .export_fbx import MARKER_AXES, MARKER_AXES_MAP
 
 
@@ -23,7 +24,11 @@ class ImportInfo:
     marker_axes_map: str = ""
     root_bones: list = field(default_factory=list)
     lod_groups: list = field(default_factory=list)
+    lod_levels: dict = field(default_factory=dict)  # node name -> LOD index, for everything under a LOD group
+    bind_matrices: dict = field(default_factory=dict)  # bone name -> bind matrix (16 floats, column-major)
+    blend_shape_names: dict = field(default_factory=dict)  # mesh node name -> blend shape channel names in order
     anim_stacks: list = field(default_factory=list)
+    anim_ranges: list = field(default_factory=list)  # (start, stop) seconds per stack, None when not stored
     has_skin: bool = False
     mesh_nodes: list = field(default_factory=list)
     null_nodes: list = field(default_factory=list)
@@ -71,11 +76,28 @@ def analyze(root):
     info.marker_axes_map = patches.get_globalsettings_string(root, MARKER_AXES_MAP) or ""
     info.root_bones = patches.root_bone_names(root)
     info.lod_groups = patches.lod_groups(root)
-    info.anim_stacks = [I.object_name(s).decode("utf-8", "replace") for s in I.anim_stacks(root)]
+    info.lod_levels = patches.lod_levels(root)
+    info.bind_matrices = patches.bind_matrices(root)
+    info.blend_shape_names = patches.blend_shape_names(root)
+    stacks = I.anim_stacks(root)
+    info.anim_stacks = [I.object_name(s).decode("utf-8", "replace") for s in stacks]
+    info.anim_ranges = [_stack_range(s) for s in stacks]
     info.has_skin = bool(I.find_objects(root, b"Deformer", subclass=b"Skin"))
     info.mesh_nodes = I.model_names(root, b"Mesh")
     info.null_nodes = I.model_names(root, b"Null")
     return info
+
+
+FBX_TICKS_PER_SECOND = 46186158000
+
+
+def _stack_range(stack):
+    """``(start, stop)`` in seconds from an AnimationStack, or None when the file does not store a stop time."""
+    stop = I.prop_values(stack, b"LocalStop") or I.prop_values(stack, b"ReferenceStop")
+    if not stop:
+        return None
+    start = I.prop_values(stack, b"LocalStart") or I.prop_values(stack, b"ReferenceStart") or [0]
+    return start[0] / FBX_TICKS_PER_SECOND, stop[0] / FBX_TICKS_PER_SECOND
 
 
 def _temporary_copy_path(filepath):
@@ -174,10 +196,12 @@ def import_file(context, filepath, prefs, report, convert_axes=None, tidy=None, 
     result.meshes = [o for o in result.objects if o.type == "MESH"]
     result.actions = _new_since(before, "actions")
     context.view_layer.update()
+    _remember_shape_key_names(result, report)
 
     stem = os.path.splitext(os.path.basename(filepath))[0]
     for arm in result.armatures:
         _post_process_armature(context, arm, result, prefs, report, convert_axes, reset_pose, stem)
+    _apply_take_ranges(context, result, prefs, report)
     _rename_actions(result, stem, report)
     if tidy:
         _tidy(context, result, stem, report)
@@ -186,6 +210,37 @@ def import_file(context, filepath, prefs, report, convert_axes=None, tidy=None, 
 
 
 # ---------------------------------------------------------------------- post-processing
+
+NAME_LIMIT = 63  # bytes Blender keeps of a name
+
+
+def _blender_form(blender_name, fbx_name):
+    """True when ``blender_name`` is ``fbx_name`` as Blender stores it: equal, or cut to 63 bytes (then made unique
+    with a ``.001`` suffix)."""
+    if blender_name == fbx_name:
+        return True
+    return len(fbx_name.encode("utf-8")) > NAME_LIMIT and fbx_name.startswith(blender_name.rsplit(".", 1)[0])
+
+
+def _remember_shape_key_names(result, report):
+    """Keep the FBX names of shape keys that Blender had to shorten, for the export to restore (``shape_key_names``)."""
+    for obj in result.meshes:
+        keys = obj.data.shape_keys
+        names = result.info.blend_shape_names.get(obj.name) or result.info.blend_shape_names.get(
+            naming.strip_numeric_suffix(obj.name)
+        )
+        if keys is None or not names:
+            continue
+        blocks = list(keys.key_blocks)[1:]
+        if len(blocks) == len(names) and all(_blender_form(kb.name, full) for kb, full in zip(blocks, names)):
+            cut = {kb.name: full for kb, full in zip(blocks, names) if kb.name != full}
+            if cut:
+                obj.morenn.shape_key_names = json.dumps(cut, sort_keys=True)
+                report.info(
+                    f"'{obj.name}': {len(cut)} shape key names were longer than Blender allows; kept for export"
+                )
+        elif any(len(n.encode("utf-8")) > NAME_LIMIT for n in names):
+            report.warning(f"'{obj.name}': shape key names longer than {NAME_LIMIT} bytes were shortened")
 
 
 def _decide_axes(arm, info, prefs, report):
@@ -214,6 +269,13 @@ def _decide_axes(arm, info, prefs, report):
 
 def _post_process_armature(context, arm, result, prefs, report, convert_axes, reset_pose, stem):
     info = result.info
+    if info.bind_matrices:
+        changed, worst = bones.snap_rest_to_bind(context, arm, info.bind_matrices, result.actions)
+        if changed and worst >= 0.001:
+            report.info(
+                f"'{arm.name}': {changed} bone(s) set to the file's exact rest rotation "
+                f"(Blender's importer was up to {worst:.3f}° off)"
+            )
     primary, secondary, source = _decide_axes(arm, info, prefs, report)
     default = (primary, secondary)
     converted = False
@@ -257,6 +319,30 @@ def _near_identity(m, tol=1e-4):
     return all(abs(m[i][j] - ident[i][j]) <= tol for i in range(4) for j in range(4))
 
 
+def _apply_take_ranges(context, result, prefs, report):
+    """Use the take's time span as the action's frame range when the keys run past it.
+
+    Unreal writes one key after the end of every animation; without this, it would come back one frame longer.
+    """
+    ranges = {name: span for name, span in zip(result.info.anim_stacks, result.info.anim_ranges) if span}
+    if not ranges or not result.actions:
+        return
+    fps = context.scene.render.fps / context.scene.render.fps_base
+    offset = float(prefs.import_anim_offset)
+    for action in result.actions:
+        span = ranges.get(action.name) or (next(iter(ranges.values())) if len(ranges) == 1 else None)
+        if span is None:
+            continue
+        first, last = round(span[0] * fps + offset, 3), round(span[1] * fps + offset, 3)
+        if action.frame_range[1] <= last + 1e-3 or last <= first:
+            continue
+        action.use_frame_range = True
+        action.frame_start, action.frame_end = first, last
+        report.info(
+            f"'{action.name}': frame range {first:g} to {last:g} from the file (its last key lies past the end)"
+        )
+
+
 def _rename_actions(result, stem, report):
     for action in result.actions:
         if action.name.startswith("Unreal Take") or action.name.startswith("Take 001"):
@@ -269,28 +355,44 @@ def _rename_actions(result, stem, report):
 def _tidy(context, result, stem, report):
     info = result.info
     base_asset = naming.sanitize_asset_name(stem)
-    # skeletal layout: armature named after the asset, meshes <asset>_Mesh
-    if result.armatures:
-        arm = result.armatures[0]
-        skinned = [m for m in result.meshes if any(md.type == "ARMATURE" and md.object == arm for md in m.modifiers)]
-        for i, mesh in enumerate(skinned):  # meshes first: the UE mesh node carries the asset name
-            mesh.name = f"{base_asset}_Mesh" if i == 0 else f"{base_asset}_Mesh_{i}"
-            mesh.data.name = mesh.name
-            mesh.morenn.export_name = naming.strip_known_prefix(base_asset, ["SM_", "SKM_", "SK_"])[0]
-        if arm.name != base_asset:
-            arm.name = base_asset
-            arm.data.name = base_asset
-    # UE helper nulls (attribute-less parents) without children or data
+    # UE helper nulls (attribute-less parents) and emptied LOD group nodes, first: they hold names used below
     for obj in list(result.objects):
         if obj.type == "EMPTY" and not obj.children and not naming.is_socket_name(obj.name):
             bpy.data.objects.remove(obj, do_unlink=True)
             result.objects.remove(obj)
-    # LOD groups exported by Unreal: empty <Name> with <Name>_LOD<i> children
+    # skeletal layout: armature named after the asset, meshes <asset>_Mesh, LOD meshes <asset>_LOD<i>
+    if result.armatures:
+        arm = result.armatures[0]
+        skinned = [m for m in result.meshes if any(md.type == "ARMATURE" and md.object == arm for md in m.modifiers)]
+
+        def level(mesh):
+            return info.lod_levels.get(naming.strip_numeric_suffix(mesh.name), 0)
+
+        meshes = [m for m in skinned if level(m) == 0]
+        lods = sorted(((level(m), m) for m in skinned if m not in meshes), key=lambda pair: pair[0])
+        for i, mesh in enumerate(meshes):  # meshes first: the UE mesh node carries the asset name
+            mesh.name = f"{base_asset}_Mesh" if i == 0 else f"{base_asset}_Mesh_{i}"
+            mesh.data.name = mesh.name
+            mesh.morenn.export_name = naming.strip_known_prefix(base_asset, ["SM_", "SKM_", "SK_"])[0]
+        per_level = {}
+        for index, mesh in lods:
+            count = per_level[index] = per_level.get(index, 0) + 1
+            mesh.name = mesh.data.name = (
+                f"{base_asset}_LOD{index}" if count == 1 else f"{base_asset}_LOD{index}_{count - 1}"
+            )
+            mesh.morenn.role, mesh.morenn.lod_index = "LOD", index
+            mesh.morenn.lod_of = meshes[0] if meshes else None
+        if lods:
+            report.info(f"'{base_asset}': LOD{'/'.join(str(i) for i in sorted(per_level))} kept as LOD objects")
+        if arm.name != base_asset:
+            arm.name = base_asset
+            arm.data.name = base_asset
+    # static LOD groups exported by Unreal: empty <Name> with <Name>_LOD<i> children (skinned LODs are done above)
     by_name = {o.name: o for o in result.objects}
     for group_name, children in info.lod_groups:
         group = by_name.get(group_name)
         lod_objs = [(naming.parse_lod_name(c), by_name.get(c)) for c in children]
-        lod_objs = [(p[1], o) for p, o in lod_objs if p and o is not None]
+        lod_objs = [(p[1], o) for p, o in lod_objs if p and o is not None and not classify.armature_of(o)]
         if not lod_objs:
             continue
         lod_objs.sort(key=lambda t: t[0])

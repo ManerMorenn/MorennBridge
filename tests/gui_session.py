@@ -164,6 +164,50 @@ def prepare_export():
     bpy.context.scene.morenn.export_dir = tempfile.mkdtemp()
 
 
+def push_without_blocking():
+    """A push returns at once and starts no thread; timer steps finish it when the editor answers."""
+    import threading
+    from unittest import mock
+
+    from tests.test_remote import PORT, FakeUnrealNode, loopback_multicast_available
+
+    if not loopback_multicast_available():
+        print("[gui] skipped push: loopback multicast is not available")
+        return
+    ue_ops = fixtures.addon_module("ops.ue_ops")
+    prefs = fixtures.addon_module("prefs").get_prefs()
+    runtime = bpy.context.window_manager.morenn_rt
+    fake = FakeUnrealNode()
+    fake.delay = 1.0
+    fake.start()
+    threads = set(threading.enumerate())
+    port, prefs.multicast_port = prefs.multicast_port, PORT
+    try:
+        with mock.patch.object(ue_ops.compat, "online_access_allowed", return_value=True):
+            prepare_export()
+            bpy.ops.morenn.export_ue()
+            runtime.ue_nodes.clear()
+            node = runtime.ue_nodes.add()
+            node.node_id, node.project = fake.node_id, "FakeProject"
+            with bpy.context.temp_override(**override()):
+                started = bpy.ops.morenn.ue_push("INVOKE_DEFAULT")
+            check(started == {"RUNNING_MODAL"}, "push returns while Unreal imports")
+            check(ue_ops.busy(), "push is running")
+            extra = set()
+            for _ in range(100):
+                extra |= set(threading.enumerate()) - threads
+                if not ue_ops.busy() and runtime.ue_status != "Importing in FakeProject…":
+                    break
+                yield
+            check(not extra, f"push starts no thread ({sorted(t.name for t in extra)})")
+            check(runtime.ue_status == "Done", f"push finishes on timer steps (status: {runtime.ue_status})")
+            check(len(fake.commands) == 1, "Unreal received one import command")
+    finally:
+        fake.close()
+        prefs.multicast_port = port
+        runtime.ue_nodes.clear()
+
+
 def undo_cases(fbx_path):
     return (
         ("scene setup", lambda: fresh(metres=True), lambda: bpy.ops.morenn.scene_setup("EXEC_DEFAULT", True)),
@@ -228,6 +272,8 @@ def steps(addon):
     expected = {cls.__name__ for cls in panels} | {cls.__name__ for cls in lists}
     check(drawn == expected, f"panels and lists drawn: missing {sorted(expected - drawn)}")
     check(not draw_errors, "no drawing errors" if not draw_errors else draw_errors[0])
+
+    yield from push_without_blocking()
 
     prepare_export()
     out = bpy.context.scene.morenn.export_dir

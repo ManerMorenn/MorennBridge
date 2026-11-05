@@ -32,7 +32,25 @@ Code is formatted by `ruff format`, with 120 columns. Keep comments short and fa
 its own folder, change other add-ons, or use the network unless `bpy.app.online_access` is on.
 
 Blender API differences between versions belong in `compat.py`. Code that runs inside Unreal lives in `ue/scripts`,
-and anything touching the `unreal` module needs a check in a live editor before it counts as done.
+and anything touching the `unreal` module needs a check in a live editor before it counts as done. The tests run
+these scripts against `tests/fake_unreal.py`. Every Unreal name they use, and every name the fake declares, must exist
+in the editor's Python stub: with *Developer Mode* on (Editor Preferences → Plugins → Python), the editor writes it
+to `<Project>/Intermediate/PythonStub/unreal.py`, and `python dev/check_ue_names.py <stub>` compares.
+
+`python dev/ue_smoke/run.py --blender <blender> --editor <UnrealEditor-Cmd> --project <test.uproject> [--roundtrip]`
+exports test scenes with the add-on, imports them into a test project with `ue/scripts` (no editor window) and
+checks names, LODs, collision, sockets, shading, skeletons, animations and vertex colours with Unreal's Python.
+`--roundtrip` also sends the Third Person template's mannequin through Blender and back, and the UE4 mannequin when
+the project has it (copy the engine's `Templates/TemplateResources/Standard/Mannequin/Content` to
+`<Project>/Content/Mannequin`). Use a project made for
+testing: the run replaces `/Game/MorennBridgeSmoke`. With the project open in the editor and remote execution on,
+`--remote` (no `--editor`) checks Unreal Link instead: discovery, push, pull and push back, through paths with
+spaces and accents. `--real <dir>` round-trips every FBX file of a folder (characters made elsewhere) and compares
+the result with Unreal's own import of the original; keep such files outside the repository.
+
+`python dev/check_fbx_sdk.py <file or folder> [...]` opens FBX files with the Autodesk FBX SDK and flags files it
+cannot import, LOD levels without a mesh, clusters without a bone and skinned meshes without a bind pose. The SDK has
+its own licence and is not part of this repository: install its Python wheel (Python 3.11 for 2020.3.11) yourself.
 
 ## Versions
 

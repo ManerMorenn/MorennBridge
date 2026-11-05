@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Export orchestration: groups -> staging -> Blender FBX exporter -> binary post-pass -> manifest."""
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -84,6 +85,8 @@ class ExportedFile:
     assets: list = field(default_factory=list)  # manifest asset entries
     node_names: list = field(default_factory=list)  # final FBX node names (Models)
     lod_specs: list = field(default_factory=list)
+    material_names: dict = field(default_factory=dict)  # Blender material -> Unreal slot of a pulled mesh
+    shape_key_names: dict = field(default_factory=dict)  # mesh node -> {shortened shape key name: full name}
     single_asset: bool = True
     has_armature: bool = False
     extra: dict = field(default_factory=dict)
@@ -147,11 +150,13 @@ def _stage_static_group(st, group, settings, lod_mode, node_names, report):
     elif group.lods:
         report.info(f"'{group.asset_name}': LOD objects ignored (LOD mode = NONE)")
 
+    # Interchange binds collision to the mesh or LOD container (named after the asset), legacy to the LOD0 node
+    collision_body = group.asset_name if settings.ue_importer == "INTERCHANGE" else render_node
     counters = {}
     for obj, kind in group.collisions:
         counters[kind] = counters.get(kind, 0) + 1
-        node = take(naming.collision_node_name(kind, render_node, counters[kind]))
-        st.stage_mesh(
+        node = take(naming.collision_node_name(kind, collision_body, counters[kind]))
+        staged = st.stage_mesh(
             obj,
             node,
             anchor @ obj.matrix_world,
@@ -161,7 +166,13 @@ def _stage_static_group(st, group, settings, lod_mode, node_names, report):
             strip_attributes=True,
             keep_materials=False,
         )
+        if kind == "UBX":
+            staging.group_faces_by_plane(staged.data)
         entry["collisions"] += 1
+    if group.sockets and has_lods and lod_mode == "LODGROUP_NODES" and settings.ue_importer == "INTERCHANGE":
+        report.warning(
+            f"'{group.asset_name}': Interchange ignores sockets inside FBX LOD groups; use the LOD<i>_Name LOD mode"
+        )
     for sock in group.sockets:
         base = sock.name[len(naming.SOCKET_PREFIX) :] if naming.is_socket_name(sock.name) else sock.name
         node = take(naming.socket_node_name(naming.sanitize_ue_name(base)))
@@ -236,7 +247,30 @@ def bone_axes_map(arm_obj, settings):
     return default, bones.axes_map_from_stored(arm_obj, default)
 
 
-def _stage_skeletal_group(st, group, settings, node_names, report):
+def _skeletal_levels(group, lod_mode, report):
+    """Meshes per LOD level: LOD0 = the render meshes, then the LOD objects skinned to the same armature."""
+    levels = [list(group.render)]
+    if group.lods and lod_mode == "NONE":
+        report.info(f"'{group.asset_name}': LOD objects ignored (LOD mode = NONE)")
+        return levels
+    for index in range(1, group.lod_count):
+        objs = []
+        for obj in group.lods.get(index, []):
+            if classify.armature_of(obj) == group.armature:
+                objs.append(obj)
+            else:
+                report.warning(
+                    f"'{obj.name}': LOD{index} of '{group.asset_name}' is not skinned to its armature; left out"
+                )
+        if objs:
+            levels.append(objs)
+        else:
+            report.warning(f"'{group.asset_name}': LOD{index} missing; LOD chain has a gap")
+    return levels
+
+
+def _stage_skeletal_group(st, group, settings, lod_mode, node_names, report, key_names):
+    """Stage one skeletal mesh. Returns the manifest entries and its LOD levels (FBX node names) when it has LODs."""
     arm = group.armature
     anchor = staging.translation_removed(arm.matrix_world)
     export_set = export_bone_names(arm)
@@ -252,29 +286,41 @@ def _stage_skeletal_group(st, group, settings, node_names, report):
     )
     node_names.append("Armature")
     targets = merge_targets_for(arm, exported)
-    entry = {"node": group.asset_name, "name": group.asset_name, "meshes": 0, "bones": len(exported)}
-    first = True
-    for mesh in group.render:
-        node = group.asset_name if first else f"{group.asset_name}_{naming.sanitize_asset_name(mesh.name)}"
-        if node in node_names:
-            raise staging.StagingError(f"Duplicate FBX node name '{node}' (E008)")
-        node_names.append(node)
-        obj = st.stage_mesh(
-            mesh,
-            node,
-            anchor @ mesh.matrix_world,
-            role="RENDER",
-            triangulate=settings.triangulate,
-            keep_shape_keys=True,
-            armature=arm_obj,
-        )
-        n_trunc, n_unweighted = staging.limit_influences(obj, exported, settings.influence_limit, targets)
-        if n_trunc:
-            report.info(f"'{mesh.name}': {n_trunc} vertices had more than {settings.influence_limit} influences (I009)")
-        if n_unweighted:
-            report.warning(f"'{mesh.name}': {n_unweighted} vertices have no weights on exported bones (W021)")
-        entry["meshes"] += 1
-        first = False
+    entry = {"node": group.asset_name, "name": group.asset_name, "meshes": len(group.render), "bones": len(exported)}
+    levels = _skeletal_levels(group, lod_mode, report)
+    lod_nodes = []
+    for index, meshes in enumerate(levels):
+        names = []
+        for k, mesh in enumerate(meshes):
+            base = (naming.parse_lod_name(mesh.name) or (mesh.name, 0))[0]
+            suffix = "" if len(meshes) == 1 else f"_{naming.sanitize_asset_name(base)}"
+            if len(levels) > 1:  # LOD group: <asset>_LOD<i>, or <asset>_<mesh>_LOD<i> under a <asset>_LOD<i> null
+                node = f"{group.asset_name}{suffix}_LOD{index}"
+            else:
+                node = group.asset_name if k == 0 else f"{group.asset_name}_{naming.sanitize_asset_name(mesh.name)}"
+            if node in node_names:
+                raise staging.StagingError(f"Duplicate FBX node name '{node}' (E008)")
+            node_names.append(node)
+            obj = st.stage_mesh(
+                mesh,
+                node,
+                anchor @ mesh.matrix_world,
+                role="RENDER" if index == 0 else "LOD",
+                triangulate=settings.triangulate,
+                keep_shape_keys=True,
+                armature=arm_obj,
+            )
+            _record_shape_key_names(key_names, node, mesh, report)
+            n_trunc, n_unweighted = staging.limit_influences(obj, exported, settings.influence_limit, targets)
+            if n_trunc:
+                report.info(
+                    f"'{mesh.name}': {n_trunc} vertices had more than {settings.influence_limit} influences (I009)"
+                )
+            if n_unweighted:
+                report.warning(f"'{mesh.name}': {n_unweighted} vertices have no weights on exported bones (W021)")
+            names.append(node)
+        lod_nodes.append(names[0] if len(names) == 1 else (f"{group.asset_name}_LOD{index}", names))
+    entry["lods"] = len(levels)
     roots = [b.name for b in arm.data.bones if b.parent is None and b.name in exported]
     entry["root_bone"] = roots[0] if roots else ""
     if len(roots) != 1:
@@ -282,10 +328,10 @@ def _stage_skeletal_group(st, group, settings, node_names, report):
     entry["morph_targets"] = any(m.data.shape_keys is not None for m in group.render)
     entry["bone_axes"] = f"{default[0]}{default[1]}"
     entry["bone_axes_map"] = bones.serialize_axes_map(axes_map, default)
-    return [entry]
+    return [entry], (lod_nodes if len(levels) > 1 else [])
 
 
-def _stage_anim_group(st, group, settings, node_names, report):
+def _stage_anim_group(st, group, settings, node_names, report, key_names):
     arm = group.armature
     if group.frame_range is None or group.frame_range[1] < group.frame_range[0]:
         raise staging.StagingError(f"'{group.asset_name}': empty frame range (E022)")
@@ -330,6 +376,7 @@ def _stage_anim_group(st, group, settings, node_names, report):
                 keep_shape_keys=True,
                 armature=arm_obj,
             )
+            _record_shape_key_names(key_names, node, mesh, report)
             staging.limit_influences(obj, exported, settings.influence_limit, targets)
     return [
         {
@@ -408,27 +455,47 @@ def run_exporter(st, kw, report):
         raise staging.StagingError(f"Blender's FBX exporter returned {result}")
 
 
-def post_process(path, name_map, bone_axes, strip_null, lod_specs, anim_stack_name=None, report=None, bone_axes_map=""):
+def post_process(
+    path,
+    name_map,
+    bone_axes,
+    strip_null,
+    lod_specs,
+    anim_stack_name=None,
+    report=None,
+    bone_axes_map="",
+    material_names=None,
+    shape_key_names=None,
+    drop_still_shapes=False,
+):
     root, version = tree.load(path)
     patches.rename_nodes(root, name_map)
+    if material_names:
+        patches.rename_nodes(root, material_names, classes=(b"Material",))
+    if shape_key_names:
+        patches.rename_blend_shapes(root, shape_key_names)
     patches.set_globalsettings_string(root, MARKER_AXES, f"{bone_axes[0]}{bone_axes[1]}")
     patches.set_globalsettings_string(root, MARKER_AXES_MAP, bone_axes_map or "")
     patches.set_globalsettings_string(root, MARKER_VERSION, __version__)
     if anim_stack_name:
         patches.rename_anim_stack(root, anim_stack_name)
     if strip_null:
-        res = patches.strip_armature_null(root, "Armature")
-        if report is not None:
-            for note in res.notes:
-                report.info(f"Post-pass: {note}")
+        _post_notes(report, patches.strip_armature_null(root, "Armature"))
     if lod_specs:
-        res = patches.inject_lod_groups(root, lod_specs)
-        if report is not None:
-            for note in res.notes:
-                report.info(f"Post-pass: {note}")
+        _post_notes(report, patches.inject_lod_groups(root, lod_specs))
+    _post_notes(report, patches.drop_empty_clusters(root))
+    if drop_still_shapes:
+        _post_notes(report, patches.drop_still_shapes(root))
+    _post_notes(report, patches.normals_per_vertex(root))
     tmp = path + ".mbtmp"
     tree.save(tmp, root, version)
     os.replace(tmp, path)
+
+
+def _post_notes(report, result):
+    if report is not None:
+        for note in result.notes:
+            report.info(f"Post-pass: {note}")
 
 
 # ---------------------------------------------------------------------- entry point
@@ -456,11 +523,24 @@ def export_file(context, exported, settings, report):
                     exported.lod_specs.append((group.asset_name, lod_nodes))
             elif group.kind == KIND_SKELETAL:
                 bone_axes = bone_axes_for(group.armature, settings)
-                exported.assets.extend(_stage_skeletal_group(st, group, settings, node_names, report))
+                assets, lod_nodes = _stage_skeletal_group(
+                    st, group, settings, lod_mode, node_names, report, exported.shape_key_names
+                )
+                exported.assets.extend(assets)
+                if lod_nodes:  # always a LOD group: skeletal sockets are bones, nothing inside the group gets lost
+                    exported.lod_specs.append((f"{group.asset_name}_LodGroup", lod_nodes))
                 exported.has_armature = True
+            if group.kind in (KIND_STATIC, KIND_SKELETAL):
+                meshes = list(group.render) + [o for objs in group.lods.values() for o in objs]
+                renames, slots = unreal_material_slots(meshes, report)
+                if slots:
+                    assets[0]["ue_materials"] = slots
+                exported.material_names.update(renames)
             elif group.kind == KIND_ANIMATION:
                 bone_axes = bone_axes_for(group.armature, settings)
-                exported.assets.extend(_stage_anim_group(st, group, settings, node_names, report))
+                exported.assets.extend(
+                    _stage_anim_group(st, group, settings, node_names, report, exported.shape_key_names)
+                )
                 exported.has_armature = True
                 exported.extra["fps"] = st.temp_scene.render.fps / st.temp_scene.render.fps_base
                 exported.extra["frame_start"], exported.extra["frame_end"] = [int(v) for v in group.frame_range]
@@ -489,11 +569,62 @@ def export_file(context, exported, settings, report):
         anim_stack_name=exported.assets[0]["name"] if is_anim else None,
         report=report,
         bone_axes_map=axes_map_text,
+        material_names=exported.material_names,
+        shape_key_names=exported.shape_key_names,
+        drop_still_shapes=exported.kind == KIND_SKELETAL,
     )
     exported.extra["bone_axes"] = f"{bone_axes[0]}{bone_axes[1]}"
     if axes_map_text:
         exported.extra["bone_axes_map"] = axes_map_text
     return exported
+
+
+def unreal_material_slots(objects, report):
+    """What a pull recorded on ``objects``: ``({Blender material: Unreal slot}, {slot: material asset path})``.
+
+    The FBX materials are named after the slots so that Unreal keeps the slot names; the push then gives each slot
+    its material asset again.
+    """
+    renames, slots = {}, {}
+    for obj in objects:
+        if not obj.morenn.ue_materials:
+            continue
+        try:
+            recorded = json.loads(obj.morenn.ue_materials)
+        except ValueError:
+            report.warning(f"'{obj.name}': stored Unreal material slots are not valid JSON; not sent")
+            continue
+        used = {m.name for m in obj.data.materials if m is not None}
+        for material, (slot, path) in recorded.items():
+            if material in used and material not in renames and slot not in slots:
+                renames[material], slots[slot] = slot, path
+    return renames, slots
+
+
+def _record_shape_key_names(key_names, node, mesh, report):
+    """Full names of the shape keys of ``mesh`` that Blender shortened on import, for the post-pass."""
+    if not mesh.morenn.shape_key_names:
+        return
+    try:
+        value = json.loads(mesh.morenn.shape_key_names)
+    except ValueError:
+        report.warning(f"'{mesh.name}': stored shape key names are not valid JSON; the shortened names are exported")
+        return
+    if isinstance(value, dict) and value:
+        key_names[node] = value
+
+
+def unreal_settings(action, report):
+    """Unreal-only settings a pull stored on ``action`` (a dict, empty when there are none)."""
+    text = action.morenn.ue_settings if action is not None else ""
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+    except ValueError:
+        report.warning(f"'{action.name}': stored Unreal settings are not valid JSON; not sent")
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def export_groups(context, groups, settings, report):
@@ -574,6 +705,9 @@ def export_groups(context, groups, settings, report):
                 extra["morph_targets"] = ef.assets[0].get("morph_targets", False)
             elif ef.kind == KIND_ANIMATION:
                 extra["skeleton"] = ef.groups[0].armature.data.morenn.ue_skeleton_path or None
+                ue_settings = unreal_settings(ef.groups[0].settings_action, report)
+                if ue_settings:
+                    extra["ue_settings"] = ue_settings
             if ef.groups[0].armature is not None:
                 extra["source_armature"] = ef.groups[0].armature.name
             manifest_mod.add_item(manifest, ef.path, ef.kind, dest, ef.assets, ef.single_asset, **extra)

@@ -186,13 +186,19 @@ def new_id(root):
 
 def remove_object(root, oid):
     """Delete an object element and every connection that references it."""
+    return remove_objects(root, {oid})
+
+
+def remove_objects(root, ids):
+    """Delete the objects whose id is in ``ids`` and every connection that references one of them."""
+    ids = set(ids)
     sec = root.find(b"Objects")
     removed = 0
     if sec is not None:
         before = len(sec.elems)
-        sec.elems = [e for e in sec.elems if not (e.props and e.props[0] == oid)]
+        sec.elems = [e for e in sec.elems if not (e.props and e.props[0] in ids)]
         removed = before - len(sec.elems)
-    remove_connections(root, lambda c: c.props[1] == oid or c.props[2] == oid)
+    remove_connections(root, lambda c: c.props[1] in ids or c.props[2] in ids)
     return removed
 
 

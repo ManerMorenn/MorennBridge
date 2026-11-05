@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Export, import and export again: what comes back has to match what went out."""
 
+import json
 import math
 import os
 import unittest
@@ -97,6 +98,21 @@ class StaticRoundTripTests(RoundTripCase):
         self.assertEqual(set(got), set(expected))
         self.assertTrue(all(len(normals) == 1 for normals in got.values()))
 
+    def test_smooth_shading_with_shape_keys_is_preserved(self):
+        """These normals are written per vertex."""
+        ball = fixtures.make_sphere("Ball", radius=50.0, segments=12, rings=8)
+        ball.data.shade_smooth()
+        ball.shape_key_add(name="Basis", from_mix=False)
+        for point in ball.shape_key_add(name="Grow", from_mix=False).data:
+            point.co *= 1.2
+        bpy.context.view_layer.update()
+        expected = corner_normals(ball.data, ball.matrix_world)
+        result = self.import_back(self.export([ball]))
+        got = corner_normals(result.meshes[0].data, result.meshes[0].matrix_world)
+        self.assertEqual(got, expected)
+        self.assertTrue(all(len(normals) == 1 for normals in got.values()))
+        self.assertEqual([k.name for k in result.meshes[0].data.shape_keys.key_blocks], ["Basis", "Grow"])
+
     def test_uvs(self):
         cube = self.source()
         expected = set(uv_coordinates(cube.data))
@@ -152,6 +168,17 @@ class SkeletalRoundTripTests(RoundTripCase):
         result = self.import_back(self.export([rig]))
         self.assert_rest_matches(result.armatures[0], expected)
 
+    def test_bone_that_weights_nothing_keeps_its_rest_pose(self):
+        """Its skin cluster is left out of the file; the bind pose still carries the bone."""
+        rig, body = _rigged_character("Hero")
+        moved = [v.index for v in body.data.vertices if v.index % 3 == 2]
+        body.vertex_groups["bone_01"].add(moved, 1.0, "REPLACE")
+        body.vertex_groups["bone_02"].remove(moved)
+        expected = {b.name: b.matrix_local.copy() for b in rig.data.bones}
+        armature = self.import_back(self.export([rig])).armatures[0]
+        self.assert_rest_matches(armature, expected)
+        self.assertTrue(armature.data.bones["bone_02"].use_deform)
+
     def test_weights(self):
         rig, body = _rigged_character("Hero")
         bpy.context.view_layer.update()
@@ -169,6 +196,29 @@ class SkeletalRoundTripTests(RoundTripCase):
         self.assertEqual([k.name for k in keys], ["Basis", "Puff"])
         ratio = keys["Puff"].data[0].co.length / keys["Basis"].data[0].co.length
         self.assertGreater(ratio, 1.05)
+
+    def test_shape_key_names_longer_than_blender_allows(self):
+        rig, body = _rigged_character("Hero")
+        body.shape_key_add(name="Puff2", from_mix=False).data[0].co.x += 5.0
+        path = self.export([rig])
+        patches, tree, insp = (fixtures.addon_module(f"fbxpatch.{m}") for m in ("patches", "tree", "inspect"))
+        root, version = tree.load(path)
+        long_names = ["corrective_" + "a" * 52 + "_L", "corrective_" + "a" * 52 + "_R"]  # 65 bytes, same 63 first
+        patches.rename_blend_shapes(root, {"SKM_Hero": dict(zip(["Puff", "Puff2"], long_names))})
+        for kind, child, parent, _prop, _e in list(insp.connections(root)):  # Unreal repeats these connections
+            if kind == b"OO" and insp.object_subclass(insp.object_by_id(root, child)) in (b"BlendShape", b"Shape"):
+                insp.add_connection(root, child, parent)
+        self.assertEqual(patches.blend_shape_names(root), {"SKM_Hero": long_names})
+        tree.save(path, root, version)
+
+        first = self.import_back(path)
+        mesh = first.meshes[0]
+        shortened = [k.name for k in mesh.data.shape_keys.key_blocks[1:]]
+        self.assertEqual(shortened[0], long_names[0][:63])
+        self.assertNotEqual(shortened[1], shortened[0])
+        self.assertEqual(json.loads(mesh.morenn.shape_key_names), dict(zip(shortened, long_names)))
+        root, _ = fixtures.fbx_load(self.export([first.armatures[0]], folder="b"))
+        self.assertEqual(patches.blend_shape_names(root), {"SKM_Hero": long_names})
 
     def test_second_generation_keeps_rest_pose(self):
         rig, _body = _rigged_character("Hero")

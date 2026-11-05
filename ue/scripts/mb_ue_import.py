@@ -1,20 +1,30 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Import the files listed in a MorennBridge manifest into the Unreal Editor.
 
 Run inside UE:  mb_ue_import.py "<path/to/batch.morenn.json>"
 Writes "<manifest>.result.json" next to the manifest and keeps the report in mb_ue_common.LAST_RESULT.
 """
 
+import importlib.util
 import json
 import os
 import sys
 
-_HERE = os.path.dirname(os.path.abspath(__file__ if "__file__" in globals() else sys.argv[0]))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-
-import mb_ue_common as C
 import unreal
+
+_HERE = os.path.dirname(os.path.abspath(__file__ if "__file__" in globals() else sys.argv[0]))
+
+
+def _load_common():
+    """mb_ue_common from this folder, loaded again on each run: the editor keeps the modules of earlier runs."""
+    spec = importlib.util.spec_from_file_location("mb_ue_common", os.path.join(_HERE, "mb_ue_common.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["mb_ue_common"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+C = _load_common()
 
 KIND_STATIC = "STATIC_MESH"
 KIND_SKELETAL = "SKELETAL_MESH"
@@ -89,7 +99,7 @@ def build_interchange_pipeline(item, options):
             C.setp(ap, "animation_range", rng)
         fps = float(item.get("fps", 0) or 0)
         if fps > 0:
-            C.setp(ap, "custom_bone_animation_sample_rate", fps, optional=True)
+            C.setp(ap, "custom_bone_animation_sample_rate", int(round(fps)), optional=True)
         C.setp(
             ap,
             "use30_hz_to_bake_bone_animation",
@@ -97,10 +107,10 @@ def build_interchange_pipeline(item, options):
             alternatives=("use_30hz_to_bake_bone_animation",),
             optional=True,
         )
-        if options.get("frame_alignment") == "SNAP_TO_CLOSEST":
-            fa = C.enum_value("InterchangeAnimationFrameAlignment", "SNAP_TO_CLOSEST_FRAME_BOUNDARY", "SNAP_TO_CLOSEST")
-            if fa is not None:
-                C.setp(ap, "frame_alignment", fa, optional=True)
+        snap = options.get("frame_alignment") == "SNAP_TO_CLOSEST"
+        fa = C.enum_value("InterchangeFrameAlignment", "SNAP_TO_CLOSEST" if snap else "NONE")
+        if fa is not None:
+            C.setp(ap, "frame_alignment", fa)
         C.setp(ap, "import_custom_attribute", True, optional=True)
         C.setp(ap, "remove_curve_redundant_keys", False, optional=True)
 
@@ -116,25 +126,53 @@ def build_interchange_pipeline(item, options):
     return p
 
 
-def verify_translator_settings():
-    cls = getattr(unreal, "InterchangeFbxTranslatorSettings", None)
-    if cls is None:
-        return
-    try:
-        settings = cls()
-        settings.load_settings()
-        changed = False
-        if C.getp(settings, "force_front_x_axis", False):
-            C.setp(settings, "force_front_x_axis", False)
-            changed = True
-        if C.getp(settings, "use_ufbx_parser", False):
-            C.setp(settings, "use_ufbx_parser", False)
-            changed = True
-        if changed:
-            settings.save_settings()
-            C.warn("Interchange FBX translator settings corrected (Force Front X Axis / ufbx parser off)")
-    except Exception:
-        C.warn("Could not verify Interchange FBX translator settings")
+# Interchange reads these from the user's EditorPerProjectUserSettings.ini, never from the pipeline
+TRANSLATOR_REQUIRED = {"force_front_x_axis": False, "use_ufbx_parser": False}
+TRANSLATOR_LABELS = {"force_front_x_axis": "Force Front X Axis", "use_ufbx_parser": "Use uFBX Translator"}
+
+
+class TranslatorSettingsOverride:
+    """Turns off the FBX translator settings our files cannot use during the import, then restores the user's."""
+
+    def __init__(self, active=True):
+        self.active = active
+        self.settings = None
+        self.changed = {}
+        self.warnings = []
+
+    def __enter__(self):
+        cls = getattr(unreal, "InterchangeFbxTranslatorSettings", None) if self.active else None
+        if cls is None:
+            return self
+        try:
+            settings = cls()
+            settings.load_settings()
+            for name, value in TRANSLATOR_REQUIRED.items():
+                current = C.getp(settings, name)
+                if current is not None and current != value and C.setp(settings, name, value):
+                    self.changed[name] = current
+            if self.changed:
+                settings.save_settings()
+                self.settings = settings
+                labels = ", ".join(TRANSLATOR_LABELS[n] for n in self.changed)
+                self.note(f"Imported with the FBX translator setting(s) {labels} off; your settings are restored")
+        except Exception as exc:
+            self.note(f"Could not check the Interchange FBX translator settings: {exc}")
+        return self
+
+    def __exit__(self, *exc_info):
+        if self.settings is not None:
+            try:
+                for name, value in self.changed.items():
+                    C.setp(self.settings, name, value)
+                self.settings.save_settings()
+            except Exception as exc:
+                self.note(f"Could not restore the Interchange FBX translator settings: {exc}")
+        return False
+
+    def note(self, message):
+        self.warnings.append(message)
+        C.log(message)
 
 
 def import_interchange(item, options):
@@ -147,13 +185,10 @@ def import_interchange(item, options):
         C.setp(params, "destination_name", item["assets"][0]["name"], optional=True)
     manager = unreal.InterchangeManager.get_interchange_manager_scripted()
     source = unreal.InterchangeManager.create_source_data(item["path"])
-    result = manager.import_asset(item["destination_path"], source, params)
-    objects = []
-    ok = bool(result)
-    if isinstance(result, tuple):
-        ok = bool(result[0])
-        objects = [o for o in result[1]] if len(result) > 1 and result[1] is not None else []
-    return ok, [C.asset_path(o) for o in objects if o is not None]
+    # Python drops the bool return value: the imported objects on success, None on failure
+    objects = manager.import_asset(item["destination_path"], source, params)
+    paths = list(dict.fromkeys(C.asset_path(o) for o in objects or [] if o is not None))
+    return bool(paths), paths
 
 
 # ---------------------------------------------------------------------- legacy
@@ -194,7 +229,7 @@ def import_legacy(item, options):
     if smd is not None:
         if normals is not None:
             C.setp(smd, "normal_import_method", normals)
-        C.setp(smd, "import_mesh_lo_ds", True, alternatives=("import_mesh_lods",))
+        C.setp(smd, "import_mesh_lods", True, alternatives=("import_mesh_lo_ds",))
         C.setp(smd, "combine_meshes", False)
         C.setp(smd, "auto_generate_collision", False)
         C.setp(
@@ -215,7 +250,7 @@ def import_legacy(item, options):
         if normals is not None:
             C.setp(skd, "normal_import_method", normals)
         C.setp(skd, "import_morph_targets", True)
-        C.setp(skd, "import_mesh_lo_ds", True, alternatives=("import_mesh_lods",))
+        C.setp(skd, "import_mesh_lods", True, alternatives=("import_mesh_lo_ds",))
         C.setp(skd, "import_meshes_in_bone_hierarchy", False)
         C.setp(skd, "use_t0_as_ref_pose", False)
         C.setp(skd, "convert_scene", True)
@@ -240,27 +275,62 @@ def import_legacy(item, options):
         C.setp(asd, "force_front_x_axis", False)
     task.set_editor_property("options", ui)
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
-    paths = [p.split(".")[0] for p in task.get_editor_property("imported_object_paths")]
-    return bool(paths), paths
+    paths = list(dict.fromkeys(p.split(".")[0] for p in task.get_editor_property("imported_object_paths")))
+    return bool(paths), paths + unlisted_links(paths, item)
+
+
+def unlisted_links(paths, item):
+    """Skeleton and physics asset made for an imported skeletal mesh, which the legacy importer does not list."""
+    folder = item["destination_path"].rstrip("/")
+    found = []
+    for path in paths:
+        mesh = C.load(path)
+        if mesh is None or mesh.get_class().get_name() != "SkeletalMesh":
+            continue
+        for prop in ("skeleton", "physics_asset"):
+            linked = C.getp(mesh, prop)
+            linked_path = C.asset_path(linked) if linked is not None else None
+            made_here = linked_path and linked_path.rsplit("/", 1)[0] == folder and linked_path != item.get("skeleton")
+            if made_here and linked_path not in paths + found:
+                found.append(linked_path)
+    return found
 
 
 # ---------------------------------------------------------------------- post-processing
 
 
-def find_assets(item, imported_paths):
-    """Imported asset paths, completed by a folder scan for the expected names."""
-    folder = item["destination_path"]
-    expected = {a["name"] for a in item.get("assets", [])}
-    found = set(imported_paths)
-    for path in C.list_assets(folder):
-        obj_path = path.split(".")[0]
-        name = obj_path.rsplit("/", 1)[-1]
-        if name in expected or any(name.startswith(e + "_") for e in expected):
-            found.add(obj_path)
-    return sorted(found)
+def missing_assets(item, imported_paths):
+    """Asset paths the manifest announces that the import did not create."""
+    folder = item["destination_path"].rstrip("/")
+    return [f"{folder}/{a['name']}" for a in item.get("assets", []) if f"{folder}/{a['name']}" not in imported_paths]
 
 
-def post_process(item, options, paths, report_item):
+def folder_assets(folder):
+    return {p.split(".")[0] for p in unreal.EditorAssetLibrary.list_assets(folder, recursive=False)}
+
+
+def restore_materials(item, paths, report_item, existed):
+    """Slots of a mesh pulled from Unreal get their material back; materials this push made for them are deleted."""
+    folder = item["destination_path"].rstrip("/")
+    replaced = set()
+    for a in item.get("assets", []):
+        mesh = C.load(f"{folder}/{a['name']}") if a.get("ue_materials") else None
+        if mesh is None:
+            continue
+        done, missing, old = C.set_material_slots(mesh, a["ue_materials"])
+        report_item.setdefault("materials", []).extend(done)
+        replaced.update(old)
+        for path in missing:
+            report_item["warnings"].append(f"{a['name']}: {path} not found; the slot keeps the imported material")
+    meshes = [m for m in (C.load(p) for p in paths) if m is not None and m.get_class().get_name().endswith("Mesh")]
+    in_use = {s["material"] for m in meshes for s in C.material_slots(m)}
+    for path in sorted(replaced - in_use - existed):
+        if path in paths and unreal.EditorAssetLibrary.delete_asset(path):
+            paths.remove(path)
+            report_item.setdefault("removed", []).append(path)
+
+
+def post_process(item, options, paths, report_item, existed=frozenset()):
     renames = []
     skeleton_path = None
     base = None
@@ -269,22 +339,26 @@ def post_process(item, options, paths, report_item):
             base = a["name"]
             break
     base_noprefix = base.split("_", 1)[1] if base and "_" in base else base
-    for path in list(paths):
+    for index, path in enumerate(list(paths)):
         asset = C.load(path)
         if asset is None:
             continue
         cls = asset.get_class().get_name()
+        new_path = path
         if cls == "Skeleton":
-            skeleton_path = path
             if options.get("rename_skeleton") and base_noprefix:
                 new_path = C.rename_asset(asset, f"{options.get('skeleton_prefix', 'SKEL_')}{base_noprefix}")
-                if new_path != path:
-                    renames.append([path, new_path])
-                    skeleton_path = new_path
+            skeleton_path = new_path
         elif cls == "PhysicsAsset" and options.get("rename_skeleton") and base_noprefix:
             new_path = C.rename_asset(asset, f"{options.get('physics_prefix', 'PHYS_')}{base_noprefix}")
-            if new_path != path:
-                renames.append([path, new_path])
+        if new_path != path:
+            renames.append([path, new_path])
+            paths[index] = new_path
+        if cls == "AnimSequence" and item.get("ue_settings"):
+            applied, failed = C.apply_settings(asset, item["ue_settings"], C.ANIM_SETTINGS)
+            report_item["settings"] = applied
+            if failed:
+                report_item["warnings"].append(f"{asset.get_name()}: settings not restored: {', '.join(failed)}")
     # complex collision mesh link
     if options.get("link_complex_collision"):
         for a in item.get("assets", []):
@@ -297,6 +371,7 @@ def post_process(item, options, paths, report_item):
             if render is not None and coll is not None:
                 if C.setp(render, "complex_collision_mesh", coll):
                     report_item["complex_collision"] = f"{folder}/{coll_name}"
+    restore_materials(item, paths, report_item, existed)
     if options.get("save", True):
         for path in paths:
             asset = C.load(path)
@@ -318,17 +393,19 @@ def import_item(item, options, use_interchange):
     }
     try:
         C.ensure_directory(item["destination_path"])
+        existed = folder_assets(item["destination_path"])
         if use_interchange:
             ok, paths = import_interchange(item, options)
         else:
             ok, paths = import_legacy(item, options)
-        paths = find_assets(item, paths)
         report_item["imported"] = paths
-        report_item["success"] = bool(ok or paths)
-        if not report_item["success"]:
+        report_item["success"] = ok
+        if not ok:
             report_item["errors"].append("Importer reported failure")
         else:
-            post_process(item, options, paths, report_item)
+            for path in missing_assets(item, paths):
+                report_item["warnings"].append(f"{path} was not created")
+            post_process(item, options, paths, report_item, existed)
     except Exception as exc:
         report_item["errors"].append(f"{exc!r}\n{C.exc_text()}")
         C.error(f"{item['file']}: {exc!r}")
@@ -340,22 +417,22 @@ def run(manifest_path):
         manifest = json.load(fh)
     options = manifest.get("options", {})
     use_interchange = manifest.get("ue_importer", "INTERCHANGE") == "INTERCHANGE"
-    if use_interchange:
-        verify_translator_settings()
     report = {"ok": True, "engine": unreal.SystemLibrary.get_engine_version(), "items": []}
-    for item in manifest.get("items", []):
-        # animations need the skeleton created by a previous item of the same batch
-        if item["kind"] == KIND_ANIMATION and not item.get("skeleton"):
-            src = item.get("source_armature")
-            for done in report["items"]:
-                if done.get("skeleton") and done.get("source_armature") == src:
-                    item["skeleton"] = done["skeleton"]
-                    break
-        r = import_item(item, options, use_interchange)
-        r["source_armature"] = item.get("source_armature")
-        report["items"].append(r)
-        report["ok"] = report["ok"] and r["success"]
-        C.log(f"{item['file']}: {'ok' if r['success'] else 'FAILED'} -> {', '.join(r['imported'])}")
+    with TranslatorSettingsOverride(active=use_interchange) as translator:
+        for item in manifest.get("items", []):
+            # animations need the skeleton created by a previous item of the same batch
+            if item["kind"] == KIND_ANIMATION and not item.get("skeleton"):
+                src = item.get("source_armature")
+                for done in report["items"]:
+                    if done.get("skeleton") and done.get("source_armature") == src:
+                        item["skeleton"] = done["skeleton"]
+                        break
+            r = import_item(item, options, use_interchange)
+            r["source_armature"] = item.get("source_armature")
+            report["items"].append(r)
+            report["ok"] = report["ok"] and r["success"]
+            C.log(f"{item['file']}: {'ok' if r['success'] else 'FAILED'} -> {', '.join(r['imported'])}")
+    report["warnings"] = translator.warnings
     C.set_result(report, manifest_path + ".result.json")
     return report
 

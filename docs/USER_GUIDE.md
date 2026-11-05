@@ -97,6 +97,9 @@ meshes skinned to it become one `SKM_<Name>.fbx`. Rules that make Unreal happy a
   and their ancestors; weights on other bones are merged into the nearest exported ancestor; at most eight
   influences per vertex (preference);
 - shape keys survive modifiers, morph targets are exported;
+- LOD meshes skinned to the same armature (`Body_LOD1`, `Body_LOD2` …, or role *LOD* with an index) become the
+  skeletal mesh's LODs, written as an FBX LOD group that both Unreal importers read; a LOD may be made of several
+  meshes;
 - bones are written with the X axis along the bone (Unreal/Maya convention) for Blender-made rigs; rigs imported
   from Unreal keep their original convention bone by bone, so re-exports match the Unreal skeleton exactly;
 - the temporary `Armature` node Blender normally adds above the root bone is removed from the file, so the root
@@ -138,6 +141,8 @@ meshes, animations), binary or ASCII. Compared with Blender's stock importer:
   *Deform / IK / Helpers*, and the per-bone axis is stored and shown in the Armature panel;
 - the armature is named after the asset, meshes `<Asset>_Mesh`, `UCX_` meshes become wire collision objects
   parented to their mesh, Unreal LOD groups become LOD chains, the action is renamed after the file;
+- Blender keeps 63 bytes of a name, and some morph targets have longer names (MetaHuman faces have some): their
+  shape keys get Blender's shortened names, and the export writes the full names again;
 - data arrives in centimetres; a metre scene is rescaled automatically (the panel suggests running the scene setup
   first).
 
@@ -150,17 +155,23 @@ flip the convention of a whole rig later (**Convert Bone Axes**) and override th
 
 <img src="images/08_unreal_link.png" width="280" alt="Unreal Link panel">
 
-With Python remote execution enabled in the Unreal project (`UE_SETUP.md`, two settings), **Find Unreal** lists the
-running editors. **Push Last Export to Unreal** imports the last manifest with the correct Interchange (or legacy)
-settings, renames the skeleton and physics asset with your prefixes, links the generated collision mesh as Complex
-Collision Mesh and saves. **Pull Selected Assets from Unreal** exports the assets selected in Unreal's Content
-Browser and imports them here. Blender's *Allow Online Access* preference must be on.
+With Python remote execution enabled in the Unreal project (one project setting, see `UE_SETUP.md`), **Find
+Unreal** lists the running editors. **Push Last Export to Unreal** imports the last manifest with the correct
+Interchange (or legacy) settings, renames the skeleton and physics asset with your prefixes, links the generated
+collision mesh as Complex Collision Mesh and saves. **Pull Selected Assets from Unreal** exports the assets selected
+in Unreal's Content Browser and imports them here. Blender's *Allow Online Access* preference must be on.
+
+FBX has no place for the settings of an Unreal animation asset (root motion, root lock, retarget source, rate
+scale, looping, additive settings). Pull stores them on the Blender action, and pushing that action sets them on
+the new asset again. Material slots work the same way: Unreal's FBX names materials after the material assets,
+so Pull records each slot and its material, and a push restores both, also when it replaces the original asset.
 
 *Push to Unreal after export* needs an editor in the list, so press **Find Unreal** first; otherwise the Log says the
-push was skipped. Blender stays busy while Unreal imports.
+push was skipped. Blender stays usable while Unreal imports: the panel shows the status, and the Log gets the
+result when Unreal answers. Push and Pull are greyed out until then.
 
-This part has not been run against a live editor yet. Property names on the Unreal side that do not exist in a
-given engine version are skipped and logged.
+Push and Pull were verified with Unreal Engine 5.8.4. Property names on the Unreal side that do not exist in a given
+engine version are skipped and logged.
 
 ## 7. Preferences
 
@@ -172,7 +183,7 @@ settings; the defaults are what the rest of this guide describes.
 | Group | Settings |
 |---|---|
 | **Naming** | Prefixes for static meshes (`SM_`), skeletal meshes (`SKM_`), skeleton (`SKEL_`) and physics asset (`PHYS_`, both applied by the Unreal-side script), animations (`A_`); the list of known prefixes that are stripped before re-prefixing; the animation name template `{prefix}{rig}_{action}`; the generated collision mesh name `{asset}_COLL`. |
-| **Export** | Bone axis convention for Blender-made rigs (primary = Unreal axis along the bone, default X; secondary default Y); max bone influences per vertex (8); vertex colour space (sRGB); smoothing (smoothing groups); triangulate; export tangents; static mesh files (one per asset or combined); LOD mode (Auto = `LOD<i>_Name` pattern for Interchange, FBX LOD group nodes for the legacy importer); strip the armature null node (keep on); include the mesh in animation files; textures (names only or copy next to the FBX); generated collision mesh file (same file or separate) and its minimum face count. |
+| **Export** | Bone axis convention for Blender-made rigs (primary = Unreal axis along the bone, default X; secondary default Y); max bone influences per vertex (8); vertex colour space (sRGB); smoothing (smoothing groups); triangulate; export tangents; static mesh files (one per asset or combined); LOD mode (Auto = `LOD<i>_Name` pattern for Interchange, FBX LOD group nodes for the legacy importer; skeletal mesh LODs are always an FBX LOD group); strip the armature null node (keep on); include the mesh in animation files; textures (names only or copy next to the FBX); generated collision mesh file (same file or separate) and its minimum face count. |
 | **Unreal import** | Which Unreal importer the files target (Interchange, the UE 5.8 default, or legacy); default UE content path; Nanite; lightmap UV generation; physics asset creation; materials and textures; renaming of skeleton/physics asset; saving; animation frame alignment; linking the generated collision mesh as Complex Collision Mesh; letting Unreal recompute tangents. These feed the manifest and the push script. |
 | **Import from Unreal** | Convert bone axes; per-bone axis detection tolerance (45°); bone alignment tolerance for lengths (15°); root, helper and minimum bone lengths (cm); reset pose after mesh import; connect bones when heads touch tails; tidy the hierarchy; animation frame offset. |
 | **Scene setup** | Viewport clip start/end (cm), grid scale, frame rate, start frame at 0, camera clip ranges. |

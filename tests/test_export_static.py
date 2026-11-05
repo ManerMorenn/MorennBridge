@@ -5,7 +5,7 @@ import os
 import unittest
 
 import bpy
-from mathutils import Euler
+from mathutils import Euler, Vector
 
 from tests import fixtures
 
@@ -96,7 +96,7 @@ class StaticExportTests(unittest.TestCase):
         self.assertEqual(len(done), 1)
         root, _ = fixtures.fbx_load(done[0].path)
         names = set(fixtures.fbx_models(root))
-        self.assertEqual(names, {"LOD0_SM_Crate", "LOD1_SM_Crate", "UCX_LOD0_SM_Crate_01", "SOCKET_Lid"})
+        self.assertEqual(names, {"LOD0_SM_Crate", "LOD1_SM_Crate", "UCX_SM_Crate_01", "SOCKET_Lid"})
         models = fixtures.fbx_models(root)
         # socket is a child of the LOD0 node, at the right local position (cm)
         sock_id = self.I.object_id(models["SOCKET_Lid"])
@@ -104,7 +104,7 @@ class StaticExportTests(unittest.TestCase):
         self.assertEqual(parents[0][2], self.I.object_id(models["LOD0_SM_Crate"]))
         t = self.I.prop_values(models["SOCKET_Lid"], b"Lcl Translation")
         fixtures.assert_vec_close(self, t, (0, 0, 60), places=3)
-        geom = fixtures.fbx_geometry_for_model(root, models["UCX_LOD0_SM_Crate_01"])
+        geom = fixtures.fbx_geometry_for_model(root, models["UCX_SM_Crate_01"])
         self.assertIsNone(geom.find(b"LayerElementUV"))
         with open(manifest_path) as fh:
             item = json.load(fh)["items"][0]
@@ -122,6 +122,8 @@ class StaticExportTests(unittest.TestCase):
         groups = self.patches.lod_groups(root)
         self.assertEqual(groups, [("SM_Crate", ["SM_Crate_LOD0", "SM_Crate_LOD1", "SM_Crate_LOD2"])])
         self.assertEqual(self.I.definition_count(root, b"Model"), len(self.I.find_objects(root, b"Model")))
+        group_model = fixtures.fbx_models(root, b"LodGroup")["SM_Crate"]
+        self.assertEqual(self.I.prop_values(group_model, b"DefaultAttributeIndex"), [0])
         # Blender's own (ufbx) importer must accept the patched file
         fixtures.fresh_scene(cm=True)
         compat = fixtures.addon_module("compat")
@@ -132,6 +134,79 @@ class StaticExportTests(unittest.TestCase):
         self.assertIn("SM_Crate_LOD2", names)
         group = bpy.data.objects["SM_Crate"]
         self.assertEqual({c.name for c in group.children}, {"SM_Crate_LOD0", "SM_Crate_LOD1", "SM_Crate_LOD2"})
+
+    def test_collision_names_follow_the_importer(self):
+        crate = fixtures.make_cube("Crate", size=100.0)
+        fixtures.make_cube("Crate_LOD1", size=90.0)
+        fixtures.make_cube("UBX_Crate", size=110.0, uv=False, color=False, material=False)
+        fixtures.make_empty("SOCKET_Lid", location=(0, 0, 60), parent=crate)
+        cases = (
+            ("INTERCHANGE", "LOD_NAMING", "UBX_SM_Crate_01", False),
+            ("INTERCHANGE", "LODGROUP_NODES", "UBX_SM_Crate_01", True),
+            ("LEGACY", "LODGROUP_NODES", "UBX_SM_Crate_LOD0_01", False),
+        )
+        for importer, lod_mode, expected, socket_warning in cases:
+            with self.subTest(importer=importer, lod_mode=lod_mode):
+                out = os.path.join(self.tmp, f"{importer}_{lod_mode}")
+                done, _, report = fixtures.run_export([crate], out, ue_importer=importer, lod_mode=lod_mode)
+                self.assertTrue(report.ok, fixtures.report_text(report))
+                self.assertIn(expected, fixtures.fbx_models(fixtures.fbx_load(done[0].path)[0]))
+                warned = "ignores sockets inside FBX LOD groups" in fixtures.report_text(report)
+                self.assertEqual(warned, socket_warning)
+
+    def test_pulled_material_slots_name_the_fbx_materials(self):
+        crate = fixtures.make_cube("Crate", size=40.0)
+        material = crate.data.materials[0].name
+        crate.morenn.ue_materials = json.dumps({material: ["Wood", "/Game/Props/M_Oak"], "Gone": ["Other", "/X/Y"]})
+        done, manifest_path, report = fixtures.run_export([crate], self.tmp)
+        self.assertTrue(report.ok, fixtures.report_text(report))
+        self.assertEqual(fixtures.fbx_materials(fixtures.fbx_load(done[0].path)[0]), {"Wood"})
+        self.assertEqual(crate.data.materials[0].name, material)  # the Blender material keeps its name
+        with open(manifest_path, encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["items"][0]["assets"][0]["ue_materials"], {"Wood": "/Game/Props/M_Oak"})
+        crate.morenn.ue_materials = "{broken"
+        done, manifest_path, report = fixtures.run_export([crate], self.tmp)
+        self.assertIn("stored Unreal material slots are not valid JSON", fixtures.report_text(report))
+        self.assertEqual(fixtures.fbx_materials(fixtures.fbx_load(done[0].path)[0]), {material})
+
+    def test_box_collision_is_written_side_by_side(self):
+        """Unreal's legacy AddBoxGeomFromTris compares later faces of an axis with the second plane only."""
+        crate = fixtures.make_cube("Crate", size=100.0)
+        fixtures.make_cube("UBX_Crate", size=8.0, location=(0, 0, 10), uv=False, color=False, material=False)
+        beam = fixtures.make_cube("UBX_Crate_02", size=10.0, uv=False, color=False, material=False)
+        beam.scale = (20.0, 1.0, 1.0)
+        beam.rotation_euler = (0.0, 0.0, math.radians(40.0))  # 200 x 10 x 10, its sides are no axis planes
+        bpy.context.view_layer.update()
+        done, _, report = fixtures.run_export([crate], self.tmp, ue_importer="LEGACY")
+        self.assertTrue(report.ok, fixtures.report_text(report))
+        root, _ = fixtures.fbx_load(done[0].path)
+        boxes = sorted(name for name in fixtures.fbx_models(root) if name.startswith("UBX_"))
+        self.assertEqual(len(boxes), 2)
+        for name in boxes:
+            with self.subTest(box=name):
+                geometry = fixtures.fbx_geometry_for_model(root, fixtures.fbx_models(root)[name])
+                vertices = [Vector(v) for v in fixtures.fbx_vertices(geometry)]
+                indices = geometry.find(b"PolygonVertexIndex").props[0]
+                planes = []
+                polygon = []
+                for index in indices:
+                    polygon.append(index if index >= 0 else -index - 1)
+                    if index >= 0:
+                        continue
+                    a, b, c = (vertices[i] for i in polygon[:3])
+                    normal = (b - a).cross(c - a).normalized()
+                    polygon = []
+                    for plane in planes:
+                        if abs(abs(normal.dot(plane["normal"])) - 1.0) < 1e-3:
+                            distance = a.dot(plane["normal"])
+                            if len(plane["distances"]) == 1 and abs(distance - plane["distances"][0]) > 1e-3:
+                                plane["distances"].append(distance)
+                            elif len(plane["distances"]) == 2:
+                                self.assertLess(abs(distance - plane["distances"][1]), 1e-3, "sides interleaved")
+                            break
+                    else:
+                        planes.append({"normal": normal, "distances": [a.dot(normal)]})
+                self.assertEqual([len(p["distances"]) for p in planes], [2, 2, 2])
 
     def test_combined_file_names_nodes(self):
         a = fixtures.make_cube("Crate", size=100.0)

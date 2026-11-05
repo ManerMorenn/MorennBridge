@@ -52,6 +52,16 @@ jobs:
         run: |
           "${{ steps.setup.outputs.executable }}" --version
           "${{ steps.setup.outputs.executable }}" -b --factory-startup --python tests/run_tests.py -- -v
+      - name: Print Blender's crash log
+        if: failure()
+        shell: bash
+        run: |
+          # where Blender writes it: TEMP on Windows, else TMP, TMPDIR or /tmp (BLI_temp_directory_path_get)
+          if [ "$RUNNER_OS" = Windows ]; then dir="$(cygpath -u "$TEMP")"; else dir="${TMP:-${TMPDIR:-/tmp}}"; fi
+          shopt -s nullglob
+          logs=("${dir%/}"/*.crash.txt)
+          [ ${#logs[@]} -gt 0 ] || echo "No crash log in $dir"
+          for log in "${logs[@]}"; do echo "== $log"; cat "$log"; done
 
   coverage:
     name: Coverage
@@ -67,6 +77,16 @@ jobs:
         env:
           MORENN_COVERAGE_LIB: ${{ runner.temp }}/coverage
         run: '"${{ steps.setup.outputs.executable }}" -b --factory-startup --python tests/run_tests.py'
+      - name: Print Blender's crash log
+        if: failure()
+        shell: bash
+        run: |
+          # where Blender writes it: TMP, TMPDIR or /tmp on Linux (BLI_temp_directory_path_get)
+          shopt -s nullglob
+          dir="${TMP:-${TMPDIR:-/tmp}}"
+          logs=("${dir%/}"/*.crash.txt)
+          [ ${#logs[@]} -gt 0 ] || echo "No crash log in $dir"
+          for log in "${logs[@]}"; do echo "== $log"; cat "$log"; done
 
   gui:
     name: GUI session
