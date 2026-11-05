@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-05)
 
 First public version. Requires Blender 4.5 or newer.
 
