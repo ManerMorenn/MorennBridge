@@ -479,18 +479,19 @@ def post_process(
     if anim_stack_name:
         patches.rename_anim_stack(root, anim_stack_name)
     if strip_null:
-        res = patches.strip_armature_null(root, "Armature")
-        if report is not None:
-            for note in res.notes:
-                report.info(f"Post-pass: {note}")
+        _post_notes(report, patches.strip_armature_null(root, "Armature"))
     if lod_specs:
-        res = patches.inject_lod_groups(root, lod_specs)
-        if report is not None:
-            for note in res.notes:
-                report.info(f"Post-pass: {note}")
+        _post_notes(report, patches.inject_lod_groups(root, lod_specs))
+    _post_notes(report, patches.drop_empty_clusters(root))
     tmp = path + ".mbtmp"
     tree.save(tmp, root, version)
     os.replace(tmp, path)
+
+
+def _post_notes(report, result):
+    if report is not None:
+        for note in result.notes:
+            report.info(f"Post-pass: {note}")
 
 
 # ---------------------------------------------------------------------- entry point

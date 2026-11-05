@@ -383,6 +383,39 @@ def rename_blend_shapes(root, per_node):
     return result
 
 
+# ---------------------------------------------------------------------- skin clusters
+
+
+def drop_empty_clusters(root):
+    """Leave out the skin clusters that weight no vertex; every skin keeps at least one.
+
+    Blender writes a cluster for every exported bone on every mesh, and Unreal's Interchange checks bind poses once
+    per cluster against all clusters (a MetaHuman face with 8 LODs took minutes). The bones stay in the skeleton:
+    their rest pose is in the bind pose and in their transforms.
+    """
+    result = PatchResult()
+    clusters = {I.object_id(c): c for c in I.find_objects(root, b"Deformer", subclass=b"Cluster")}
+    per_skin = {}
+    for kind, child, parent, _prop, _e in I.connections(root):
+        if kind == b"OO" and child in clusters:
+            per_skin.setdefault(parent, {})[child] = None
+    drop = set()
+    for members in per_skin.values():
+        empty = [cid for cid in members if not _weights_a_vertex(clusters[cid])]
+        drop.update(empty[1:] if len(empty) == len(members) else empty)
+    if drop:
+        I.remove_objects(root, drop)
+        I.definition_count(root, b"Deformer", -len(drop))
+        result.changed = True
+        result.note(f"{len(drop)} skin cluster(s) that weight no vertex left out")
+    return result
+
+
+def _weights_a_vertex(cluster):
+    indexes = cluster.find(b"Indexes")
+    return indexes is not None and bool(indexes.props) and len(indexes.props[0]) > 0
+
+
 def bind_matrices(root):
     """``{node name: 16 floats}``: each bone's bind matrix, column-major (cluster TransformLink, else the bind pose)."""
     names = {I.object_id(m): I.object_name(m).decode("utf-8", "replace") for m in I.find_objects(root, b"Model")}

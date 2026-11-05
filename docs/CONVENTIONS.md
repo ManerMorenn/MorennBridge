@@ -33,6 +33,7 @@ Bone names must survive Unreal's sanitising (`spine.001` would become `spine_001
 ## Skeletons
 - One root bone (`root` by convention). Root motion lives on the root bone: Unreal ignores motion of the armature *object* and of its parents.
 - Bones exported: deform bones, bones tagged *Always export*, `ik_*` and `SOCKET_*` bones, plus their ancestors. Weights on other bones are merged into the nearest exported ancestor. At most *Max bone influences* (default 8) per vertex.
+- A mesh gets a skin cluster only for the bones that weight some of its vertices; the other bones stay in the skeleton, with their rest pose in the bind pose. Unreal checks the bind pose once per cluster, so a cluster for every bone on every LOD made a MetaHuman face take minutes to import.
 - Blender-made rigs are exported with the X axis along the bone (Unreal/Maya convention). Rigs imported from Unreal keep their original convention (stored on the armature).
 - The temporary `Armature` null node is removed from the file, so the root bone is the FBX root (works for both Unreal importers and other engines).
 

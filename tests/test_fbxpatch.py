@@ -4,6 +4,7 @@ import os
 import unittest
 
 from tests import fixtures
+from tests.test_export_skeletal import _rigged_character
 
 
 def _tree_equal(a, b, path="root"):
@@ -56,6 +57,23 @@ class FbxPatchTests(unittest.TestCase):
         res = self.patches.rename_nodes(root, {"SM_Crate": "SM_Box"})
         self.assertTrue(res.changed)
         self.assertIn("SM_Box", fixtures.fbx_models(root, b"Mesh"))
+
+    def test_a_skin_keeps_one_cluster_when_none_weights_a_vertex(self):
+        rig, _body = _rigged_character("Hero", shape_key=False)
+        done, _, report = fixtures.run_export([rig], self.tmp)
+        self.assertTrue(report.ok, [str(e) for e in report.entries])
+        root, _version = self.tree.load(done[0].path)
+        clusters = self.I.find_objects(root, b"Deformer", subclass=b"Cluster")
+        for cluster in clusters:
+            for elem in cluster.find_all(b"Indexes") + cluster.find_all(b"Weights"):
+                cluster.remove(elem)
+        result = self.patches.drop_empty_clusters(root)
+        kept = self.I.find_objects(root, b"Deformer", subclass=b"Cluster")
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(result.notes, ["2 skin cluster(s) that weight no vertex left out"])
+        gone = {self.I.object_id(c) for c in clusters} - {self.I.object_id(kept[0])}
+        self.assertFalse([c for c in self.I.connections(root) if c[1] in gone or c[2] in gone])
+        self.assertFalse(self.patches.drop_empty_clusters(root))
 
     def test_retype_root_bones(self):
         rig = fixtures.make_armature("Rig", bones=2, bone_length=10.0)

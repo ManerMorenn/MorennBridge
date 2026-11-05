@@ -10,6 +10,8 @@ First public version. Requires Blender 4.5 or newer.
   tangents, collision/socket/LOD naming, skeletal mesh LODs, generated collision meshes and a JSON manifest.
 - Shape keys export with their vertex groups applied. Muted shape keys are exported too, as Blender's own exporter
   does.
+- Skin clusters are written only for the bones that weight a mesh, so Unreal imports skeletal meshes with many bones
+  and LODs much faster.
 - Curves, surfaces, text, metaballs, Geometry Nodes instances and collection instances export as meshes.
 - Import of Unreal FBX exports, binary or ASCII: root bone restored, per-bone axis conversion, bone lengths,
   hierarchy clean-up. Morph target names longer than Blender allows come back in full on export.

@@ -235,6 +235,21 @@ class SkeletalExportTests(unittest.TestCase):
         # user's mesh still has its helper group
         self.assertIn("not_a_bone", [vg.name for vg in body.vertex_groups])
 
+    def test_bones_that_weight_nothing_get_no_skin_cluster(self):
+        rig, body = _rigged_character(shape_key=False)
+        moved = [v.index for v in body.data.vertices if v.index % 3 == 2]
+        body.vertex_groups["bone_01"].add(moved, 1.0, "REPLACE")
+        body.vertex_groups["bone_02"].remove(moved)
+        done, _, report = fixtures.run_export([rig], self.tmp)
+        self.assertTrue(report.ok, [str(e) for e in report.entries])
+        root, _ = fixtures.fbx_load(done[0].path)
+        clusters = self.I.find_objects(root, b"Deformer", subclass=b"Cluster")
+        self.assertEqual(sorted(self.I.object_name(c).decode() for c in clusters), ["bone_01", "root"])
+        self.assertIn("bone_02", fixtures.fbx_models(root, b"LimbNode"))
+        self.assertIn("bone_02", self.patches.bind_matrices(root))
+        self.assertEqual(self.I.definition_count(root, b"Deformer"), len(self.I.find_objects(root, b"Deformer")))
+        self.assertIn("1 skin cluster(s) that weight no vertex left out", fixtures.report_text(report))
+
     def test_multiple_roots_rejected(self):
         rig, body = _rigged_character(shape_key=False)
         compat = fixtures.addon_module("compat")

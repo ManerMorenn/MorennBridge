@@ -153,6 +153,17 @@ class SkeletalRoundTripTests(RoundTripCase):
         result = self.import_back(self.export([rig]))
         self.assert_rest_matches(result.armatures[0], expected)
 
+    def test_bone_that_weights_nothing_keeps_its_rest_pose(self):
+        """Its skin cluster is left out of the file; the bind pose still carries the bone."""
+        rig, body = _rigged_character("Hero")
+        moved = [v.index for v in body.data.vertices if v.index % 3 == 2]
+        body.vertex_groups["bone_01"].add(moved, 1.0, "REPLACE")
+        body.vertex_groups["bone_02"].remove(moved)
+        expected = {b.name: b.matrix_local.copy() for b in rig.data.bones}
+        armature = self.import_back(self.export([rig])).armatures[0]
+        self.assert_rest_matches(armature, expected)
+        self.assertTrue(armature.data.bones["bone_02"].use_deform)
+
     def test_weights(self):
         rig, body = _rigged_character("Hero")
         bpy.context.view_layer.update()
