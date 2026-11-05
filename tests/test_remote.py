@@ -280,19 +280,25 @@ class RemoteProtocolTests(unittest.TestCase):
         steps = []
 
         def until(poll):
+            """Poll until done; returns the result and how many steps returned while the editor was still busy."""
+            busy = 0
             while True:
                 started = time.monotonic()
                 done = poll(0.0)
                 steps.append(time.monotonic() - started)
                 if done:
-                    return done
+                    return done, busy
+                busy += 1
                 time.sleep(0.02)
 
         session.start_connect(node, timeout=3.0, resend_interval=0.1)
-        self.assertTrue(until(session.poll_connect))
+        connected, busy_connecting = until(session.poll_connect)
+        self.assertTrue(connected)
         session.start_command("1+41", self.remote.EXEC_EVALUATE, timeout=5.0)
-        self.assertEqual(until(session.poll_result).result, "42")
-        self.assertGreater(len(steps), 20)
+        result, busy_answering = until(session.poll_result)
+        self.assertEqual(result.result, "42")
+        self.assertGreater(busy_connecting, 0)
+        self.assertGreater(busy_answering, 0)
         self.assertLess(max(steps), 0.25)
         self.assertEqual(self.fake.connections, 1)
 
