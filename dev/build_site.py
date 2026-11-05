@@ -3,7 +3,8 @@
 
     python dev/build_site.py --out site
 
-Pages are generated from README.md, docs/*.md and CHANGELOG.md; images are copied from docs/images.
+Pages are generated from README.md, docs/*.md, CHANGELOG.md and the footer pages in dev/site; images are copied from
+docs/images.
 Requires the ``markdown``, ``pymdown-extensions`` and ``pygments`` packages.
 """
 
@@ -32,6 +33,10 @@ PAGES = [
     ("unreal-setup", "docs/UE_SETUP.md", "Unreal setup", "Reference"),
     ("support", "docs/SUPPORT.md", "Support", "Help"),
     ("changelog", "CHANGELOG.md", "Changelog", "Releases"),
+]
+# Linked from the footer only, not from the navigation
+FOOTER_PAGES = [
+    ("legal", "dev/site/legal.md", "Legal notice", "Legal"),
 ]
 
 # Markdown links between repository files, rewritten to site URLs (relative to the site root).
@@ -195,7 +200,7 @@ def build(out_dir):
         shutil.copytree(images_src, out_dir / "images", ignore=shutil.ignore_patterns("_*"))
 
     urls = []
-    for slug, source, label, eyebrow in PAGES:
+    for slug, source, label, eyebrow in PAGES + FOOTER_PAGES:
         depth = 1 if slug else 0
         prefix = "../" * depth
         md_text = (ROOT / source).read_text(encoding="utf-8")
