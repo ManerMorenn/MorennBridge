@@ -483,6 +483,7 @@ def post_process(
     if lod_specs:
         _post_notes(report, patches.inject_lod_groups(root, lod_specs))
     _post_notes(report, patches.drop_empty_clusters(root))
+    _post_notes(report, patches.normals_per_vertex(root))
     tmp = path + ".mbtmp"
     tree.save(tmp, root, version)
     os.replace(tmp, path)

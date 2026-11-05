@@ -98,6 +98,21 @@ class StaticRoundTripTests(RoundTripCase):
         self.assertEqual(set(got), set(expected))
         self.assertTrue(all(len(normals) == 1 for normals in got.values()))
 
+    def test_smooth_shading_with_shape_keys_is_preserved(self):
+        """These normals are written per vertex."""
+        ball = fixtures.make_sphere("Ball", radius=50.0, segments=12, rings=8)
+        ball.data.shade_smooth()
+        ball.shape_key_add(name="Basis", from_mix=False)
+        for point in ball.shape_key_add(name="Grow", from_mix=False).data:
+            point.co *= 1.2
+        bpy.context.view_layer.update()
+        expected = corner_normals(ball.data, ball.matrix_world)
+        result = self.import_back(self.export([ball]))
+        got = corner_normals(result.meshes[0].data, result.meshes[0].matrix_world)
+        self.assertEqual(got, expected)
+        self.assertTrue(all(len(normals) == 1 for normals in got.values()))
+        self.assertEqual([k.name for k in result.meshes[0].data.shape_keys.key_blocks], ["Basis", "Grow"])
+
     def test_uvs(self):
         cube = self.source()
         expected = set(uv_coordinates(cube.data))

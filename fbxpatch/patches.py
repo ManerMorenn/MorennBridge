@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Patches applied to exported / imported FBX files (binary level)."""
 
+import array
+
+import numpy as np
+
 from . import inspect as I
-from .tree import Elem, join_name_class, split_name_class
+from .tree import T_FLOAT64_ARRAY, Elem, join_name_class, split_name_class
 
 IDENTITY_TOL = 1e-6
 
@@ -414,6 +418,65 @@ def drop_empty_clusters(root):
 def _weights_a_vertex(cluster):
     indexes = cluster.find(b"Indexes")
     return indexes is not None and bool(indexes.props) and len(indexes.props[0]) > 0
+
+
+# ---------------------------------------------------------------------- normals
+
+NORMAL_TOL = 1e-3
+
+
+def normals_per_vertex(root, tolerance=NORMAL_TOL):
+    """On meshes with shape keys, store the normals per vertex when every vertex has a single normal.
+
+    Blender writes them per face corner, and Unreal's FBX SDK reads per-corner normals of a mesh with shapes slowly
+    (a MetaHuman face: 166 s, 6 s per vertex). Unreal's own exports store them per vertex. Split normals stay per
+    corner.
+    """
+    result = PatchResult()
+    blend_shapes = {I.object_id(b) for b in I.find_objects(root, b"Deformer", subclass=b"BlendShape")}
+    shaped = {parent for kind, child, parent, _p, _e in I.connections(root) if kind == b"OO" and child in blend_shapes}
+    count = 0
+    for geometry in I.find_objects(root, b"Geometry", subclass=b"Mesh"):
+        if I.object_id(geometry) not in shaped:
+            continue
+        layers = geometry.find_all(b"LayerElementNormal")
+        converted = [_normals_to_vertices(geometry, layer, tolerance) for layer in layers]
+        if any(converted):
+            count += 1
+    if count:
+        result.changed = True
+        result.note(f"normals stored per vertex on {count} mesh(es) with shape keys")
+    return result
+
+
+def _normals_to_vertices(geometry, layer, tolerance):
+    mapping, reference = layer.find(b"MappingInformationType"), layer.find(b"ReferenceInformationType")
+    normals, index = layer.find(b"Normals"), layer.find(b"NormalsIndex")
+    polygons, vertices = geometry.find(b"PolygonVertexIndex"), geometry.find(b"Vertices")
+    if None in (mapping, reference, normals, polygons, vertices) or layer.find(b"NormalsW") is not None:
+        return False
+    if mapping.props[0] != b"ByPolygonVertex" or reference.props[0] not in (b"Direct", b"IndexToDirect"):
+        return False
+    corners = np.asarray(polygons.props[0], dtype=np.int64)
+    corners = np.where(corners < 0, ~corners, corners)
+    values = np.asarray(normals.props[0], dtype=np.float64).reshape(-1, 3)
+    if reference.props[0] == b"IndexToDirect":
+        if index is None:
+            return False
+        values = values[np.asarray(index.props[0], dtype=np.int64)]
+    if len(values) != len(corners):
+        return False
+    per_vertex = np.zeros((len(vertices.props[0]) // 3, 3))
+    per_vertex[corners] = values
+    if len(corners) and np.abs(per_vertex[corners] - values).max() > tolerance:
+        return False
+    mapping.props[0] = b"ByVertice"
+    reference.props[0] = b"Direct"
+    if index is not None:
+        layer.remove(index)
+    normals.props[0] = array.array("d", per_vertex.ravel().tobytes())
+    normals.props_type[0] = T_FLOAT64_ARRAY
+    return True
 
 
 def bind_matrices(root):
