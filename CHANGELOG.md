@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Skeletal mesh export: the bind matrices (pose nodes, skin cluster `TransformLink` and `Transform`) are recomputed
+  in double precision from the bones' node transforms, so the two agree as in Unreal's own exports. Blender writes
+  them from the same float32 rest pose through different products, so they drifted apart down a bone chain (a
+  mannequin finger: 1.5e-4) past the tolerance Unreal validates the bind pose with, and every such import logged
+  "invalid bind pose ... rebind using the time zero pose" and rebound from the node transforms instead.
+
 ## 0.1.0 (2026-11-05)
 
 First public version. Requires Blender 4.5 or newer.

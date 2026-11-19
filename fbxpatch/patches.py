@@ -2,6 +2,7 @@
 """Patches applied to exported / imported FBX files (binary level)."""
 
 import array
+import math
 
 import numpy as np
 
@@ -418,6 +419,123 @@ def drop_empty_clusters(root):
 def _weights_a_vertex(cluster):
     indexes = cluster.find(b"Indexes")
     return indexes is not None and bool(indexes.props) and len(indexes.props[0]) > 0
+
+
+# ---------------------------------------------------------------------- rest pose vs bind pose
+
+SNAP_SCALE_TOL = 1e-5
+SNAP_ZERO_TOL = 1e-9
+
+
+def _fbx_rotation(deg, axis):
+    """3x3 rotation about one axis, FBX row-vector convention (``v @ R``)."""
+    a = math.radians(deg)
+    c, s = math.cos(a), math.sin(a)
+    if axis == 0:
+        return np.array([[1.0, 0.0, 0.0], [0.0, c, s], [0.0, -s, c]])
+    if axis == 1:
+        return np.array([[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]])
+    return np.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]])
+
+
+def fbx_local_matrix(t, r, s):
+    """4x4 node matrix from ``Lcl Translation / Rotation (XYZ, degrees) / Scaling``, as the FBX SDK composes it
+    (row vectors, translation in the last row; a child's global is ``local @ parent``)."""
+    m = np.eye(4)
+    m[:3, :3] = np.diag(s) @ _fbx_rotation(r[0], 0) @ _fbx_rotation(r[1], 1) @ _fbx_rotation(r[2], 2)
+    m[3, :3] = t
+    return m
+
+
+def bind_pose_from_rest(root):
+    """Recompute the bind matrices from the node transforms, so the two agree to double precision.
+
+    Blender writes a bone's ``Lcl Translation / Rotation / Scaling`` and its bind matrices (pose node, cluster
+    ``TransformLink`` and ``Transform``) from the same float32 rest pose through different products, so they drift
+    apart down a chain: up to 1.5e-4 on a mannequin finger. The FBX SDK's bind pose check, which both Unreal importers
+    run, allows 1e-4; past it Unreal logs "invalid bind pose ... rebind using the time zero pose" and rebinds every
+    bone from the node transforms anyway. Unreal's own exports agree to 1e-13.
+
+    The node transforms are kept: they are the rest pose Blender shows, and what Unreal fell back to. The bind matrices
+    are recomposed from them in double precision, as the FBX SDK composes them: every pose node, each cluster's
+    ``TransformLink`` (the bone's global matrix) and ``Transform`` (the mesh's global matrix over the bone's, which
+    the file stores in bone space). Near-unit scales snap to exact 1. Files with animation (the curves carry the
+    transforms) and files with a rotation order, pre- or post-rotation on a model are left alone.
+    """
+    result = PatchResult()
+    if I.find_objects(root, b"AnimationStack"):
+        return result
+    tree = model_tree(root)
+    models = {I.object_id(m): m for m in I.find_objects(root, b"Model")}
+    pose_nodes = {}
+    for pose in I.find_objects(root, b"Pose"):
+        for node in pose.find_all(b"PoseNode"):
+            ref, matrix = node.find(b"Node"), node.find(b"Matrix")
+            if ref is not None and ref.props and matrix is not None and matrix.props and len(matrix.props[0]) == 16:
+                pose_nodes.setdefault(ref.props[0], []).append(matrix)
+    clusters = {I.object_id(c): c for c in I.find_objects(root, b"Deformer", subclass=b"Cluster")}
+    parent_of, links = {}, {}
+    for kind, child, parent, _prop, _e in I.connections(root):
+        if kind != b"OO":
+            continue
+        parent_of.setdefault(child, parent)
+        if parent in clusters and child in models:
+            links.setdefault(child, []).append(clusters[parent])
+    if not pose_nodes and not links:
+        return result
+    for mid, model in models.items():
+        order = I.prop_values(model, b"RotationOrder")
+        pre = _lcl(model, b"PreRotation", (0, 0, 0)) + _lcl(model, b"PostRotation", (0, 0, 0))
+        if (order and int(order[0]) != 0) or any(abs(v) > SNAP_ZERO_TOL for v in pre):
+            name = I.object_name(model).decode("utf-8", "replace")
+            return result.note(f"bind matrices left as written: '{name}' has a rotation order or pre/post-rotation")
+
+    globals_ = {}
+
+    def global_of(mid):
+        if mid not in globals_:
+            model = models[mid]
+            scale = [1.0 if abs(v - 1.0) < SNAP_SCALE_TOL else v for v in _lcl(model, b"Lcl Scaling", (1, 1, 1))]
+            local = fbx_local_matrix(
+                _lcl(model, b"Lcl Translation", (0, 0, 0)), _lcl(model, b"Lcl Rotation", (0, 0, 0)), scale
+            )
+            parent = tree[mid][2]
+            globals_[mid] = local @ (global_of(parent) if parent in models else np.eye(4))
+        return globals_[mid]
+
+    moved = set()
+
+    def put(elem, values, mid):
+        if any(abs(x - y) > SNAP_ZERO_TOL for x, y in zip(elem.props[0], values)):
+            moved.add(mid)
+        elem.props[0] = array.array("d", values)
+        elem.props_type[0] = T_FLOAT64_ARRAY
+
+    for mid in set(pose_nodes) | set(links):
+        if mid not in models:
+            continue
+        bone_global = global_of(mid)
+        flat = bone_global.reshape(16).tolist()
+        for elem in pose_nodes.get(mid, []):
+            put(elem, flat, mid)
+        for cluster in links.get(mid, []):
+            put(cluster.find(b"TransformLink"), flat, mid)
+            transform = cluster.find(b"Transform")
+            if transform is None or not transform.props or len(transform.props[0]) != 16:
+                continue
+            mesh = parent_of.get(parent_of.get(parent_of.get(I.object_id(cluster))))
+            mesh_global = global_of(mesh) if mesh in models else np.eye(4)
+            put(transform, (mesh_global @ np.linalg.inv(bone_global)).reshape(16).tolist(), mid)
+        model = models[mid]
+        scale = _lcl(model, b"Lcl Scaling", (1, 1, 1))
+        snapped = [1.0 if abs(v - 1.0) < SNAP_SCALE_TOL else v for v in scale]
+        if snapped != scale:
+            I.set_prop(model, b"Lcl Scaling", b"Lcl Scaling", b"", b"A", *snapped)
+            moved.add(mid)
+    if moved:
+        result.changed = True
+        result.note(f"{len(moved)} node(s): bind matrices recomputed from the rest transforms")
+    return result
 
 
 # ---------------------------------------------------------------------- shape keys

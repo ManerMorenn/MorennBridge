@@ -483,6 +483,7 @@ def post_process(
         _post_notes(report, patches.strip_armature_null(root, "Armature"))
     if lod_specs:
         _post_notes(report, patches.inject_lod_groups(root, lod_specs))
+    _post_notes(report, patches.bind_pose_from_rest(root))
     _post_notes(report, patches.drop_empty_clusters(root))
     if drop_still_shapes:
         _post_notes(report, patches.drop_still_shapes(root))
